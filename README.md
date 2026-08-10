@@ -66,18 +66,53 @@ npm run check
 npm run smoke
 ```
 
-- `npm run check`：JavaScript 语法检查与单元测试。
+- `npm run check`：Manifest、JavaScript 语法和单元测试检查。
 - `npm run smoke`：请求实时接口并在终端打印五个模型的 IQ 矩阵。
+
+## 打包与发布
+
+本地可以按 Chrome 扩展版本号生成发布包：
+
+```bash
+npm run package -- v0.2.0
+```
+
+输出文件：
+
+```text
+dist/codex-radar-iq-monitor-v0.2.0.zip
+dist/codex-radar-iq-monitor-v0.2.0.zip.sha256
+```
+
+推送形如 `v0.3.0` 的 tag 后，`.github/workflows/release.yml` 会自动：
+
+1. 运行全部检查和测试；
+2. 将 tag 版本写入发布包内的 `manifest.json`；
+3. 生成 ZIP 和 SHA-256 文件；
+4. 创建 GitHub Release，并自动生成 Release Notes；
+5. 上传 ZIP 与校验文件。
+
+发布示例：
+
+```bash
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+发布 tag 必须使用三段纯数字版本，例如 `v1.2.3`。打包过程不会修改仓库根目录的 `manifest.json`。
 
 ## 目录
 
 ```text
 codex-radar-monitor/
+├── .github/workflows/release.yml
 ├── manifest.json
 ├── package.json
 ├── icons/
 ├── scripts/
-│   └── smoke.mjs
+│   ├── package.mjs
+│   ├── smoke.mjs
+│   └── validate.mjs
 ├── src/
 │   ├── background.js
 │   ├── popup.css

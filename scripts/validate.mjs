@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8"));
+const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
 
 assert.equal(manifest.manifest_version, 3, "manifest_version must be 3");
 assert.equal(manifest.background?.type, "module", "background must be an ES module");
@@ -33,4 +34,22 @@ assert.match(scriptTags[0][1], /src=["']popup\.js["']/, "popup script must be lo
 assert.equal(scriptTags[0][2].trim(), "", "inline JavaScript is not allowed");
 assert.doesNotMatch(popupHtml, /<script[^>]+src=["']https?:/i, "remote scripts are not allowed");
 
+assert.equal(
+  packageJson.scripts?.package,
+  "node scripts/package.mjs",
+  "package script must invoke scripts/package.mjs",
+);
+await access(resolve(root, "scripts/package.mjs"));
+
+const releaseWorkflow = await readFile(
+  resolve(root, ".github/workflows/release.yml"),
+  "utf8",
+);
+assert.match(releaseWorkflow, /tags:\s*\n\s*-\s*["']v\*["']/, "release workflow must listen for version tags");
+assert.match(releaseWorkflow, /contents:\s*write/, "release workflow needs contents write permission");
+assert.match(releaseWorkflow, /npm run check/, "release workflow must run validation");
+assert.match(releaseWorkflow, /npm run package/, "release workflow must build the extension archive");
+assert.match(releaseWorkflow, /gh release create/, "release workflow must create a GitHub Release");
+
 console.log(`Manifest validated: ${referencedFiles.size} referenced files found.`);
+console.log("Release workflow validated.");

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex Radar IQ</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="radar-mark" aria-hidden="true"></span>
+        <div>
+          <h1>Codex Radar IQ</h1>
+          <p id="status-text">正在读取数据…</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button
+          id="theme-button"
+          class="theme-button"
+          type="button"
+          aria-label="切换主题"
+          title="主题：自动"
+        >
+          <span id="theme-icon" class="theme-icon" aria-hidden="true">◐</span>
+          <span id="theme-label">自动</span>
+        </button>
+        <button id="refresh-button" class="refresh-button" type="button">
+          <span class="refresh-icon" aria-hidden="true">↻</span>
+          <span>刷新</span>
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <section id="error-banner" class="error-banner" hidden></section>
+
+      <section aria-labelledby="overview-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="overview-title">模型总览</h2>
+            <p>所有思考等级的加权汇总</p>
+          </div>
+          <span id="dataset-meta" class="dataset-meta"></span>
+        </div>
+        <div id="model-summary" class="model-summary" aria-live="polite"></div>
+      </section>
+
+      <section class="matrix-section" aria-labelledby="matrix-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="matrix-title">思考等级 IQ</h2>
+            <p>与 Codex Radar 页面使用相同的 IQ 计算口径</p>
+          </div>
+        </div>
+        <div class="matrix-wrap">
+          <table class="iq-matrix">
+            <thead>
+              <tr>
+                <th scope="col">模型</th>
+                <th scope="col">总体</th>
+                <th scope="col">low</th>
+                <th scope="col">medium</th>
+                <th scope="col">high</th>
+                <th scope="col">xhigh</th>
+                <th scope="col">max</th>
+                <th scope="col">ultra</th>
+              </tr>
+            </thead>
+            <tbody id="matrix-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <details class="settings-panel">
+        <summary>监听设置</summary>
+        <div class="settings-grid">
+          <label>
+            <span>刷新间隔</span>
+            <select id="refresh-minutes">
+              <option value="5">5 分钟</option>
+              <option value="15">15 分钟</option>
+              <option value="30">30 分钟</option>
+              <option value="60">1 小时</option>
+            </select>
+          </label>
+
+          <label class="toggle-row">
+            <span>分数变化通知</span>
+            <input id="notifications-enabled" type="checkbox" />
+          </label>
+
+          <label>
+            <span>通知阈值</span>
+            <span class="number-field">
+              <input
+                id="notification-threshold"
+                type="number"
+                min="0"
+                max="20"
+                step="0.5"
+                inputmode="decimal"
+              />
+              <b>IQ</b>
+            </span>
+          </label>
+        </div>
+        <p id="settings-status" class="settings-status"></p>
+      </details>
+    </main>
+
+    <footer>
+      <span id="source-time">尚未获取数据</span>
+      <a href="https://deng.codexradar.com/" target="_blank" rel="noreferrer">打开源站</a>
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

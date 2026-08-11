@@ -66,7 +66,7 @@ npm run check
 npm run smoke
 ```
 
-- `npm run check`：Manifest、JavaScript 语法和单元测试检查。
+- `npm run check`：Manifest、发布脚本、JavaScript 语法和单元测试检查。
 - `npm run smoke`：请求实时接口并在终端打印五个模型的 IQ 矩阵。
 
 ## 打包与发布
@@ -89,8 +89,10 @@ dist/codex-radar-iq-monitor-v0.2.0.zip.sha256
 1. 运行全部检查和测试；
 2. 将 tag 版本写入发布包内的 `manifest.json`；
 3. 生成 ZIP 和 SHA-256 文件；
-4. 创建 GitHub Release，并自动生成 Release Notes；
-5. 上传 ZIP 与校验文件。
+4. 创建或更新 GitHub Release；
+5. 使用服务账号获取 Chrome Web Store API 访问令牌；
+6. 上传 ZIP，并在异步处理时轮询上传状态；
+7. 以 `DEFAULT_PUBLISH` 提交审核，通过审核后自动发布。
 
 发布示例：
 
@@ -99,7 +101,28 @@ git tag v0.3.0
 git push origin v0.3.0
 ```
 
-发布 tag 必须使用三段纯数字版本，例如 `v1.2.3`。打包过程不会修改仓库根目录的 `manifest.json`。
+发布 tag 必须使用三段纯数字版本，例如 `v1.2.3`，而且版本必须高于 Chrome Web Store 当前版本。打包过程不会修改仓库根目录的 `manifest.json`。
+
+### Chrome Web Store 自动发布配置
+
+Chrome Web Store API V2 只能更新已经存在的商店项目。第一次发布仍需在 Chrome Web Store Developer Dashboard 中手动创建项目、上传 ZIP，并完成商店资料、隐私和分发设置。
+
+完成首次项目创建后：
+
+1. 在 Google Cloud 项目中启用 **Chrome Web Store API**。
+2. 创建一个服务账号，并为它生成 JSON 密钥。
+3. 在 Chrome Web Store Developer Dashboard 的账号设置中添加该服务账号邮箱。
+4. 打开本仓库的 **Settings → Secrets and variables → Actions**，添加：
+
+| 类型 | 名称 | 内容 |
+|---|---|---|
+| Repository secret | `CWS_SERVICE_ACCOUNT_JSON` | 服务账号 JSON 密钥的完整内容 |
+| Repository variable | `CWS_PUBLISHER_ID` | Chrome Web Store Publisher ID |
+| Repository variable | `CWS_ITEM_ID` | 已创建扩展的 32 位 Item ID |
+
+服务账号 JSON 是长期凭据，不要提交到仓库。如果密钥泄露，应立即在 Google Cloud 中撤销并重新生成。
+
+工作流提交成功只表示新版本已经进入 Chrome Web Store 的审核或发布流程，不代表可以绕过商店审核。
 
 ## 目录
 
@@ -111,6 +134,7 @@ codex-radar-monitor/
 ├── icons/
 ├── scripts/
 │   ├── package.mjs
+│   ├── publish-chrome-web-store.mjs
 │   ├── smoke.mjs
 │   └── validate.mjs
 ├── src/

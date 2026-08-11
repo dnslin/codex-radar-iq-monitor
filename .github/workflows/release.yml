@@ -9,13 +9,14 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: chrome-web-store-release
   cancel-in-progress: false
 
 jobs:
   release:
     name: Validate, package, and publish
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
@@ -48,3 +49,11 @@ jobs:
               --generate-notes \
               --title "Codex Radar IQ Monitor $GITHUB_REF_NAME"
           fi
+
+      - name: Publish to Chrome Web Store
+        env:
+          CWS_SERVICE_ACCOUNT_JSON: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
+          CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+          CWS_ITEM_ID: ${{ vars.CWS_ITEM_ID }}
+          CWS_PACKAGE_PATH: "dist/codex-radar-iq-monitor-${{ github.ref_name }}.zip"
+        run: npm run publish:chrome

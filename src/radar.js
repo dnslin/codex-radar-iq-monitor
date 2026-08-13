@@ -29,6 +29,11 @@ export const MODELS = [
     shortLabel: "GPT-5.5",
   },
   {
+    id: "deepseek-v4-pro",
+    label: "DeepSeek V4 Pro",
+    shortLabel: "V4 Pro",
+  },
+  {
     id: "deepseek-v4-flash",
     label: "DeepSeek V4 Flash",
     shortLabel: "V4 Flash",

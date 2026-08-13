@@ -4,11 +4,12 @@
 
 ## 功能
 
-- 汇总以下 5 个模型：
+- 汇总以下 6 个模型：
   - GPT-5.6 Sol
   - GPT-5.6 Terra
   - GPT-5.6 Luna
   - GPT-5.5
+  - DeepSeek V4 Pro
   - DeepSeek V4 Flash
 - 展示 `low`、`medium`、`high`、`xhigh`、`max`、`ultra` 各思考等级的 IQ。
 - 展示每个模型跨思考等级的总体 IQ。
@@ -45,7 +46,7 @@ IQ               = round(weighted_score / weighted_samples × 150)
 
 5. 固定工具栏中的 **Codex Radar IQ Monitor** 图标。
 
-首次安装后扩展会立即获取一次数据。打开弹窗即可查看五个模型的总体分数和思考等级矩阵。
+首次安装后扩展会立即获取一次数据。打开弹窗即可查看六个模型的总体分数和思考等级矩阵。
 
 ## 权限说明
 
@@ -67,7 +68,7 @@ npm run smoke
 ```
 
 - `npm run check`：Manifest、发布脚本、JavaScript 语法和单元测试检查。
-- `npm run smoke`：请求实时接口并在终端打印五个模型的 IQ 矩阵。
+- `npm run smoke`：请求实时接口并在终端打印六个模型的 IQ 矩阵。
 
 ## 打包与发布
 

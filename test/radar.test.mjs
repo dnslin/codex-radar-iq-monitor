@@ -72,7 +72,7 @@ test("buildSnapshot uses the same weighted IQ formula as Codex Radar", () => {
   assert.equal(sol.iq, 100);
 });
 
-test("buildSnapshot always returns the five monitored models", () => {
+test("buildSnapshot always returns the six monitored models", () => {
   const snapshot = buildSnapshot(fixture());
 
   assert.deepEqual(

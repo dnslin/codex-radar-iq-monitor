@@ -1,6 +1,4 @@
 import {
-  EFFORT_ORDER,
-  MODELS,
   SETTINGS_KEY,
   STATE_KEY,
   normalizeSettings,
@@ -11,6 +9,7 @@ import {
   normalizeThemeMode,
   resolveTheme,
 } from "./theme.js";
+import { hasLowCoverage, isNumber, runtimeOptions, selectModels, valueDelta } from "./view.js";
 
 const statusText = document.querySelector("#status-text");
 const themeButton = document.querySelector("#theme-button");
@@ -19,8 +18,17 @@ const themeLabel = document.querySelector("#theme-label");
 const refreshButton = document.querySelector("#refresh-button");
 const errorBanner = document.querySelector("#error-banner");
 const datasetMeta = document.querySelector("#dataset-meta");
-const modelSummary = document.querySelector("#model-summary");
-const matrixBody = document.querySelector("#matrix-body");
+const modelList = document.querySelector("#model-list");
+const modelScroll = document.querySelector("#model-scroll");
+const modelSearch = document.querySelector("#model-search");
+const runtimeFilter = document.querySelector("#runtime-filter");
+const modelSort = document.querySelector("#model-sort");
+const resultCount = document.querySelector("#result-count");
+const resultsStatus = document.querySelector("#results-status");
+const emptyState = document.querySelector("#empty-state");
+const emptyTitle = document.querySelector("#empty-title");
+const emptyDescription = document.querySelector("#empty-description");
+const clearFilters = document.querySelector("#clear-filters");
 const sourceTime = document.querySelector("#source-time");
 const refreshMinutes = document.querySelector("#refresh-minutes");
 const notificationsEnabled = document.querySelector("#notifications-enabled");
@@ -32,6 +40,8 @@ let currentSettings = normalizeSettings();
 let currentThemeMode = "auto";
 let settingsStatusTimer = null;
 let autoThemeTimer = null;
+let renderedData = "";
+const modelRows = new Map();
 
 const numberFormatter = new Intl.NumberFormat("zh-CN", {
   maximumFractionDigits: 1,
@@ -103,10 +113,6 @@ async function cycleTheme() {
   }
 }
 
-function isNumber(value) {
-  return value !== null && value !== "" && Number.isFinite(Number(value));
-}
-
 function sendMessage(message) {
   return chrome.runtime.sendMessage(message).then((response) => {
     if (!response?.ok) {
@@ -140,31 +146,28 @@ function formatRelativeTime(value) {
 function formatSample(value) {
   const weighted = Number(value?.weightedSamples) || 0;
   const raw = Number(value?.rawSamples) || 0;
-  if (!weighted) return "暂无样本";
+  if (!weighted) return "待采样";
   if (Math.abs(weighted - raw) > 0.001) {
     return `加权 ${numberFormatter.format(weighted)}`;
   }
   return `${numberFormatter.format(raw)} 次`;
 }
 
-function valueDelta(previous, current) {
-  const before = isNumber(previous) ? Number(previous) : null;
-  const after = isNumber(current) ? Number(current) : null;
-  if (before === null || after === null || before === after) return null;
-  return after - before;
-}
-
-function appendDelta(container, delta, className = "delta") {
-  const element = document.createElement("span");
-  element.className = className;
+function renderDelta(element, delta) {
+  element.className = "delta";
   if (delta === null) {
     element.classList.add("neutral");
-    element.textContent = "";
+    element.textContent = "—";
+    element.title = "暂无可对比的上次分数";
+  } else if (delta === 0) {
+    element.classList.add("neutral");
+    element.textContent = "持平";
+    element.title = "与上次快照相比没有变化";
   } else {
     element.classList.add(delta > 0 ? "positive" : "negative");
-    element.textContent = `${delta > 0 ? "+" : ""}${delta}`;
+    element.textContent = `${delta > 0 ? "+" : ""}${numberFormatter.format(delta)}`;
+    element.title = `较上次${delta > 0 ? "上升" : "下降"} ${numberFormatter.format(Math.abs(delta))} IQ`;
   }
-  container.append(element);
 }
 
 function modelMap(snapshot) {
@@ -208,113 +211,188 @@ function renderError(state) {
     return;
   }
   errorBanner.hidden = false;
-  errorBanner.textContent = `数据更新失败：${state.error}`;
+  const cached = state.snapshot ? "。当前显示上次成功获取的数据。" : "。请点击刷新重试。";
+  errorBanner.textContent = `数据更新失败：${state.error}${cached}`;
 }
 
-function renderSummary(snapshot, previousSnapshot) {
-  const currentModels = modelMap(snapshot);
-  const previousModels = modelMap(previousSnapshot);
-  modelSummary.replaceChildren();
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
 
-  for (const definition of MODELS) {
-    const model = currentModels.get(definition.id);
-    const previous = previousModels.get(definition.id);
-    const card = document.createElement("article");
-    card.className = "model-card";
-    card.dataset.model = definition.id;
+function createModelRow(model) {
+  const row = element("details", "model-row");
+  row.dataset.model = model.id;
+  const summary = element("summary", "model-summary row-layout");
+  const identity = element("span", "model-identity");
+  const nameLine = element("span", "model-name-line");
+  const name = element("span", "model-name");
+  const status = element("span", "model-status");
+  nameLine.append(name, status);
+  const metadata = element("span", "model-meta");
+  const runtime = element("span", "runtime-badge");
+  const effortCount = element("span", "effort-count");
+  const coverageNote = element("span", "coverage-note", "样本覆盖不足");
+  coverageNote.title = "已测题目不足全部题目的 60%，IQ 仅供参考";
+  metadata.append(runtime, effortCount, coverageNote);
+  identity.append(nameLine, metadata);
+  const score = element("strong", "model-score");
+  const sample = element("span", "sample");
+  const delta = element("span", "delta");
+  const chevron = element("span", "chevron", "›");
+  chevron.setAttribute("aria-hidden", "true");
+  summary.append(identity, score, sample, delta, chevron);
 
-    const name = document.createElement("div");
-    name.className = "model-card-name";
-    name.textContent = definition.shortLabel;
-    name.title = definition.label;
-
-    const scoreRow = document.createElement("div");
-    scoreRow.className = "model-card-score";
-    const score = document.createElement("strong");
-    score.textContent = isNumber(model?.iq) ? String(model.iq) : "—";
-    const unit = document.createElement("small");
-    unit.textContent = "IQ";
-    scoreRow.append(score, unit);
-
-    const meta = document.createElement("div");
-    meta.className = "model-card-meta";
-    const sample = document.createElement("span");
-    sample.textContent = formatSample(model);
-    meta.append(sample);
-    appendDelta(meta, valueDelta(previous?.iq, model?.iq));
-
-    card.append(name, scoreRow, meta);
-    modelSummary.append(card);
+  const content = element("div", "effort-content");
+  const table = element("table", "effort-table");
+  const caption = element("caption", "sr-only");
+  const head = document.createElement("thead");
+  const heading = document.createElement("tr");
+  for (const label of ["思考等级", "IQ", "样本", "较上次"]) {
+    const cell = element("th", "", label);
+    cell.scope = "col";
+    heading.append(cell);
   }
+  head.append(heading);
+  const body = document.createElement("tbody");
+  table.append(caption, head, body);
+  const noEfforts = element("p", "no-efforts", "源站尚未提供思考等级数据");
+  content.append(table, noEfforts);
+  row.append(summary, content);
+  return { row, summary, name, status, runtime, effortCount, coverageNote, score, sample, delta, table, caption, body, noEfforts };
 }
 
-function createScoreCell(value, previousValue, label) {
-  const cell = document.createElement("td");
-  const wrapper = document.createElement("div");
-  wrapper.className = "score-cell";
-  const scoreLine = document.createElement("div");
-  scoreLine.className = "score-line";
-  const score = document.createElement("span");
-  score.className = "score";
-
-  if (!value || !isNumber(value.iq)) {
-    wrapper.classList.add("missing");
-    score.textContent = "—";
-    cell.title = `${label}：暂无数据`;
-  } else {
-    score.textContent = String(value.iq);
-    cell.title = `${label}：${value.iq} IQ，${formatSample(value)}`;
-  }
-
-  scoreLine.append(score);
-  appendDelta(scoreLine, valueDelta(previousValue?.iq, value?.iq), "cell-delta");
-
-  const sample = document.createElement("div");
-  sample.className = "sample";
-  sample.textContent = value ? formatSample(value) : "";
-  wrapper.append(scoreLine, sample);
-  cell.append(wrapper);
-  return cell;
+function renderSample(container, sample) {
+  const count = element("span", "sample-count", formatSample(sample));
+  const coverage = element("span", "coverage-count", `${sample.sampledTaskCount} / ${currentState.snapshot.taskCount} 题`);
+  coverage.hidden = !isNumber(sample.sampledTaskCount);
+  container.replaceChildren(count, coverage);
+  container.title = `原始 ${numberFormatter.format(sample.rawSamples)} 次 · 加权 ${numberFormatter.format(sample.weightedSamples)} · 已测 ${sample.sampledTaskCount} / ${currentState.snapshot.taskCount} 题`;
 }
 
-function renderMatrix(snapshot, previousSnapshot) {
-  const currentModels = modelMap(snapshot);
-  const previousModels = modelMap(previousSnapshot);
-  matrixBody.replaceChildren();
+function updateModelRow(view, model, previous) {
+  view.model = model;
+  view.previous = previous;
+  view.name.textContent = model.label;
+  view.name.title = model.modelId;
+  view.status.textContent = model.statusLabel;
+  view.status.hidden = !model.statusLabel;
+  view.runtime.textContent = model.runtimeLabel;
+  view.effortCount.textContent = `${model.efforts.length} 个等级`;
+  view.coverageNote.hidden = !hasLowCoverage(model.sampledTaskCount, currentState.snapshot.taskCount);
+  view.score.textContent = isNumber(model.iq) ? numberFormatter.format(model.iq) : "—";
+  view.score.classList.toggle("missing", !isNumber(model.iq));
+  renderSample(view.sample, model);
+  renderDelta(view.delta, valueDelta(previous?.iq, model.iq));
+  view.summary.setAttribute("aria-label", `${model.label}，${model.runtimeLabel}${model.statusLabel ? `，${model.statusLabel}` : ""}，总体 ${view.score.textContent} IQ，${view.sample.textContent}，较上次${view.delta.textContent}。展开查看思考等级`);
+  view.caption.textContent = `${model.label}（${model.runtimeLabel}）的思考等级 IQ`;
+  view.table.hidden = model.efforts.length === 0;
+  view.noEfforts.hidden = model.efforts.length > 0;
 
-  for (const definition of MODELS) {
-    const model = currentModels.get(definition.id);
-    const previousModel = previousModels.get(definition.id);
-    const efforts = effortMap(model);
-    const previousEfforts = effortMap(previousModel);
+  const previousEfforts = effortMap(previous);
+  view.body.replaceChildren(...model.efforts.map((effort) => {
     const row = document.createElement("tr");
-    row.dataset.model = definition.id;
+    const name = element("th", "effort-name", effort.effort);
+    name.scope = "row";
+    const score = element("td", isNumber(effort.iq) ? "effort-score" : "missing", isNumber(effort.iq) ? numberFormatter.format(effort.iq) : "—");
+    const sample = element("td", "sample");
+    renderSample(sample, effort);
+    const delta = element("td", "delta");
+    renderDelta(delta, valueDelta(previousEfforts.get(effort.effort)?.iq, effort.iq));
+    row.append(name, score, sample, delta);
+    return row;
+  }));
+}
 
-    const heading = document.createElement("th");
-    heading.scope = "row";
-    const modelName = document.createElement("span");
-    modelName.className = "model-name-row";
-    const dot = document.createElement("span");
-    dot.className = "model-dot";
-    const text = document.createElement("span");
-    text.textContent = definition.shortLabel;
-    text.title = definition.label;
-    modelName.append(dot, text);
-    heading.append(modelName);
-    row.append(heading);
-
-    row.append(createScoreCell(model, previousModel, `${definition.label} 总体`));
-    for (const effort of EFFORT_ORDER) {
-      row.append(
-        createScoreCell(
-          efforts.get(effort),
-          previousEfforts.get(effort),
-          `${definition.label} ${effort}`,
-        ),
-      );
-    }
-    matrixBody.append(row);
+function updateRuntimeFilter(models) {
+  const options = runtimeOptions(models);
+  const definitions = [
+    { value: "", label: `全部运行工具 · ${models.length}` },
+    ...options.map((option) => ({ value: option.value, label: `${option.label} · ${option.count}` })),
+  ];
+  const previousValue = runtimeFilter.value;
+  definitions.forEach((definition, index) => {
+    const option = runtimeFilter.options[index] ?? runtimeFilter.appendChild(document.createElement("option"));
+    option.value = definition.value;
+    option.textContent = definition.label;
+  });
+  while (runtimeFilter.options.length > definitions.length) {
+    runtimeFilter.remove(runtimeFilter.options.length - 1);
   }
+  runtimeFilter.value = options.some((option) => option.value === previousValue) ? previousValue : "";
+}
+
+function renderEmptyState(visibleCount) {
+  emptyState.hidden = visibleCount > 0;
+  if (visibleCount) return;
+  const snapshot = currentState?.snapshot;
+  const hasModels = snapshot?.models.length > 0;
+  const loading = ["loading", "refreshing"].includes(currentState?.status);
+  clearFilters.hidden = !hasModels;
+  if (hasModels) {
+    emptyTitle.textContent = "没有匹配的模型";
+    emptyDescription.textContent = "试试其他关键词，或清空筛选查看全部模型。";
+  } else if (loading) {
+    emptyTitle.textContent = "正在获取模型数据…";
+    emptyDescription.textContent = "首次获取可能需要几秒钟。";
+  } else if (currentState?.error) {
+    emptyTitle.textContent = "暂时无法获取模型数据";
+    emptyDescription.textContent = "请点击右上角刷新重试。";
+  } else if (snapshot) {
+    emptyTitle.textContent = "源站暂未提供模型数据";
+    emptyDescription.textContent = "下次刷新时会自动检查新增模型。";
+  } else {
+    emptyTitle.textContent = "正在读取模型数据…";
+    emptyDescription.textContent = "稍后即可查看所有模型的最新 IQ。";
+  }
+}
+
+function renderModels({ updateData = false, resetScroll = false } = {}) {
+  const models = currentState?.snapshot?.models ?? [];
+  const previousModels = modelMap(currentState?.previousSnapshot);
+  const visible = selectModels(models, {
+    query: modelSearch.value,
+    runtime: runtimeFilter.value,
+    sort: modelSort.value,
+  });
+  const visibleIds = new Set(visible.map((model) => model.id));
+  const currentIds = new Set(models.map((model) => model.id));
+  const focused = document.activeElement;
+  const scrollTop = modelScroll.scrollTop;
+
+  for (const [id, view] of modelRows) {
+    if (!currentIds.has(id)) {
+      view.row.remove();
+      modelRows.delete(id);
+    } else {
+      view.row.hidden = !visibleIds.has(id);
+    }
+  }
+
+  visible.forEach((model, index) => {
+    let view = modelRows.get(model.id);
+    const isNew = !view;
+    if (isNew) {
+      view = createModelRow(model);
+      modelRows.set(model.id, view);
+    }
+    const previous = previousModels.get(model.id);
+    if (updateData || isNew || view.model !== model || view.previous !== previous) {
+      updateModelRow(view, model, previous);
+    }
+    view.row.hidden = false;
+    if (modelList.children[index] !== view.row) modelList.insertBefore(view.row, modelList.children[index] ?? null);
+  });
+
+  if (focused instanceof HTMLElement && focused.isConnected && !focused.closest("[hidden]") && document.activeElement !== focused) {
+    focused.focus({ preventScroll: true });
+  }
+  modelScroll.scrollTop = resetScroll ? 0 : scrollTop;
+  resultCount.textContent = `${visible.length} / ${models.length} 个模型`;
+  resultsStatus.textContent = `显示 ${visible.length} 个模型，共 ${models.length} 个`;
+  renderEmptyState(visible.length);
 }
 
 function renderMetadata(snapshot) {
@@ -324,7 +402,7 @@ function renderMetadata(snapshot) {
     return;
   }
 
-  datasetMeta.textContent = `${snapshot.taskCount} 个任务 · ${snapshot.comboCount} 个档位`;
+  datasetMeta.textContent = `${snapshot.models.length} 模型 · ${runtimeOptions(snapshot.models).length} 运行工具 · ${snapshot.taskCount} 任务`;
   const source = snapshot.sourceUpdatedAt
     ? `站点快照 ${formatDateTime(snapshot.sourceUpdatedAt)}`
     : "站点快照时间未知";
@@ -335,8 +413,18 @@ function renderState(state) {
   currentState = state;
   renderStatus(state);
   renderError(state);
-  renderSummary(state?.snapshot, state?.previousSnapshot);
-  renderMatrix(state?.snapshot, state?.previousSnapshot);
+  const nextData = JSON.stringify([state?.snapshot, state?.previousSnapshot]);
+  if (nextData !== renderedData) {
+    renderedData = nextData;
+    updateRuntimeFilter(state?.snapshot?.models ?? []);
+    renderModels({ updateData: true });
+  } else {
+    renderEmptyState(selectModels(state?.snapshot?.models ?? [], {
+      query: modelSearch.value,
+      runtime: runtimeFilter.value,
+      sort: modelSort.value,
+    }).length);
+  }
   renderMetadata(state?.snapshot);
 }
 
@@ -384,13 +472,16 @@ async function saveSettings() {
 }
 
 async function refreshNow() {
-  refreshButton.disabled = true;
-  refreshButton.classList.add("loading");
+  renderState({
+    ...currentState,
+    status: currentState?.snapshot ? "refreshing" : "loading",
+    error: null,
+  });
   try {
     const response = await sendMessage({ type: "REFRESH_NOW" });
     renderState(response.state);
   } catch (error) {
-    renderError({ error: error.message });
+    renderState({ ...currentState, status: "error", error: error.message });
   } finally {
     refreshButton.disabled = false;
     refreshButton.classList.remove("loading");
@@ -398,7 +489,7 @@ async function refreshNow() {
 }
 
 async function initialize() {
-  renderState({ status: "idle", snapshot: null, previousSnapshot: null });
+  renderState({ status: "loading", snapshot: null, previousSnapshot: null });
   try {
     const response = await sendMessage({ type: "GET_STATE" });
     renderSettings(response.settings);
@@ -409,7 +500,7 @@ async function initialize() {
     }
     void sendMessage({ type: "MARK_SEEN" }).catch(() => {});
   } catch (error) {
-    renderError({ error: error.message });
+    renderState({ ...currentState, status: "error", error: error.message });
     statusText.textContent = "扩展后台不可用";
   }
 }
@@ -418,6 +509,15 @@ themeButton.addEventListener("click", () => {
   void cycleTheme();
 });
 refreshButton.addEventListener("click", refreshNow);
+modelSearch.addEventListener("input", () => renderModels({ resetScroll: true }));
+runtimeFilter.addEventListener("change", () => renderModels({ resetScroll: true }));
+modelSort.addEventListener("change", () => renderModels({ resetScroll: true }));
+clearFilters.addEventListener("click", () => {
+  modelSearch.value = "";
+  runtimeFilter.value = "";
+  renderModels({ resetScroll: true });
+  modelSearch.focus();
+});
 refreshMinutes.addEventListener("change", saveSettings);
 notificationsEnabled.addEventListener("change", saveSettings);
 notificationThreshold.addEventListener("change", saveSettings);

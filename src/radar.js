@@ -5,40 +5,41 @@ export const ALARM_NAME = "codex-radar-refresh";
 export const STATE_KEY = "radarState";
 export const SETTINGS_KEY = "radarSettings";
 
-export const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra"];
+export const EFFORT_ORDER = ["off", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 
-export const MODELS = [
-  {
-    id: "gpt-5.6-sol",
-    label: "GPT-5.6 Sol",
-    shortLabel: "Sol",
-  },
-  {
-    id: "gpt-5.6-terra",
-    label: "GPT-5.6 Terra",
-    shortLabel: "Terra",
-  },
-  {
-    id: "gpt-5.6-luna",
-    label: "GPT-5.6 Luna",
-    shortLabel: "Luna",
-  },
-  {
-    id: "gpt-5.5",
-    label: "GPT-5.5",
-    shortLabel: "GPT-5.5",
-  },
-  {
-    id: "deepseek-v4-pro",
-    label: "DeepSeek V4 Pro",
-    shortLabel: "V4 Pro",
-  },
-  {
-    id: "deepseek-v4-flash",
-    label: "DeepSeek V4 Flash",
-    shortLabel: "V4 Flash",
-  },
-];
+// Display names only, never an allowlist. New API models retain their original ID
+// as a readable label until the site gives them a familiar display name.
+const MODEL_LABELS = new Map(Object.entries({
+  "gpt-6-astra": "GPT-6 Astra",
+  "gpt-5.6-sol": "GPT-5.6 Sol",
+  "gpt-5.6-terra": "GPT-5.6 Terra",
+  "gpt-5.6-luna": "GPT-5.6 Luna",
+  "gpt-5.5": "GPT-5.5",
+  "deepseek-v4-pro": "DeepSeek V4 Pro",
+  "deepseek-v4-flash": "DeepSeek V4 Flash",
+  "dsh-deepseek-v4-pro": "DeepSeek V4 Pro",
+  "dsh-deepseek-v4-flash": "DeepSeek V4 Flash",
+  "dsh-deepseek-v4-flash-vision-exp": "DeepSeek V4 Flash Vision Exp",
+  "grok-4.6": "Grok 4.6",
+  "k3": "Kimi K3",
+  "glm-5.3": "GLM-5.3",
+  "glm-5.3-flash": "GLM-5.3 Flash",
+  "gemini-3.7-flash": "Gemini 3.7 Flash",
+  "hy4-preview": "HY4 Preview",
+  "claude-sonnet-5": "Claude Sonnet 5",
+  "claude-opus-5": "Claude Opus 5",
+}));
+
+const RUNTIME_LABELS = new Map(Object.entries({
+  "codex": "Codex",
+  "dsh-minimal": "DSH",
+  "grok-build": "Grok",
+  "kimi-code": "Kimi Code",
+  "zcode": "ZCode",
+  "antigravity": "Antigravity",
+  "codebuddy": "CodeBuddy",
+  "claude-code": "Claude Code",
+}));
 
 export const DEFAULT_SETTINGS = Object.freeze({
   refreshMinutes: 15,
@@ -46,7 +47,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
   notificationThreshold: 2,
 });
 
-const MODEL_INDEX = new Map(MODELS.map((model) => [model.id, model]));
 const EFFORT_INDEX = new Map(EFFORT_ORDER.map((effort, index) => [effort, index]));
 
 function finiteNumber(value, fallback = 0) {
@@ -64,7 +64,7 @@ function sampleFromCell(cell) {
     return { weightedScore: 0, weightedSamples: 0, rawSamples: 0 };
   }
 
-  const scoreSum = Number.isFinite(Number(cell?.score_sum))
+  const scoreSum = cell?.score_sum != null && Number.isFinite(Number(cell.score_sum))
     ? Number(cell.score_sum)
     : finiteNumber(cell?.p);
   const rawWeight = finiteNumber(cell?.iq_weight, 1);
@@ -119,30 +119,49 @@ export function buildSnapshot(table, fetchedAt = new Date().toISOString()) {
   }
 
   const comboKeys = new Set();
-  const effortsByModel = new Map(MODELS.map((model) => [model.id, new Set()]));
+  const modelsById = new Map();
 
   for (const combo of table.combos) {
-    const model = String(combo?.model ?? "");
-    const effort = String(combo?.effort ?? "");
-    if (!MODEL_INDEX.has(model) || !effort) continue;
+    const model = String(combo?.model ?? "").trim();
+    const effort = String(combo?.effort ?? "").trim();
+    if (!model || !effort) continue;
     const key = `${model}|${effort}`;
     if (comboKeys.has(key)) continue;
     comboKeys.add(key);
-    effortsByModel.get(model).add(effort);
+    if (!modelsById.has(model)) {
+      const runtime = String(combo.agent || "codex");
+      modelsById.set(model, {
+        id: model,
+        modelId: model,
+        label: MODEL_LABELS.get(model) ?? model,
+        runtime,
+        runtimeLabel: RUNTIME_LABELS.get(runtime) ?? runtime,
+        statusLabel: model === "claude-sonnet-5" || model === "claude-opus-5" ? "内测中" : "",
+        efforts: new Set(),
+      });
+    }
+    modelsById.get(model).efforts.add(effort);
   }
 
-  const models = MODELS.map((model) => {
+  const models = [...modelsById.values()].map((model) => {
     const modelSample = emptySample();
+    const sampledTasks = new Set();
     const efforts = sortEfforts(
-      [...effortsByModel.get(model.id)].map((effort) => {
+      [...model.efforts].map((effort) => {
         const effortSample = emptySample();
+        let sampledTaskCount = 0;
 
         for (const task of table.tasks) {
           const taskId = String(task?.id ?? "");
           if (!taskId) continue;
           const cell = table.cells[`${taskId}|${model.id}|${effort}`];
           if (!cell) continue;
-          addSample(effortSample, sampleFromCell(cell));
+          const sample = sampleFromCell(cell);
+          addSample(effortSample, sample);
+          if (sample.rawSamples > 0) {
+            sampledTaskCount += 1;
+            sampledTasks.add(taskId);
+          }
         }
 
         addSample(modelSample, effortSample);
@@ -152,6 +171,7 @@ export function buildSnapshot(table, fetchedAt = new Date().toISOString()) {
           weightedScore: effortSample.weightedScore,
           weightedSamples: effortSample.weightedSamples,
           rawSamples: effortSample.rawSamples,
+          sampledTaskCount,
         };
       }),
     );
@@ -159,17 +179,21 @@ export function buildSnapshot(table, fetchedAt = new Date().toISOString()) {
     return {
       id: model.id,
       label: model.label,
-      shortLabel: model.shortLabel,
+      modelId: model.modelId,
+      runtime: model.runtime,
+      runtimeLabel: model.runtimeLabel,
+      statusLabel: model.statusLabel,
       iq: iqFromSample(modelSample),
       weightedScore: modelSample.weightedScore,
       weightedSamples: modelSample.weightedSamples,
       rawSamples: modelSample.rawSamples,
+      sampledTaskCount: sampledTasks.size,
       efforts,
     };
   });
 
   return {
-    version: 1,
+    version: 2,
     benchmarkId: String(table.benchmark_id ?? "deep-swe"),
     scoringMode: String(table.scoring_mode ?? ""),
     rollingWindow: finiteNumber(table.rolling_window, 0),
@@ -222,6 +246,7 @@ function valuesFromSnapshot(snapshot) {
       scope: "model",
       modelId: model.id,
       modelLabel: model.label,
+      runtimeLabel: model.runtimeLabel,
       effort: null,
       iq: model.iq,
     });
@@ -230,6 +255,7 @@ function valuesFromSnapshot(snapshot) {
         scope: "effort",
         modelId: model.id,
         modelLabel: model.label,
+        runtimeLabel: model.runtimeLabel,
         effort: effort.effort,
         iq: effort.iq,
       });
@@ -250,10 +276,10 @@ export function compareSnapshots(previous, current, threshold = 0) {
   for (const key of keys) {
     const oldValue = before.get(key);
     const newValue = after.get(key);
-    if (!oldValue || !newValue) continue;
+    const value = newValue ?? oldValue;
 
-    const oldIq = Number.isFinite(oldValue.iq) ? oldValue.iq : null;
-    const newIq = Number.isFinite(newValue.iq) ? newValue.iq : null;
+    const oldIq = Number.isFinite(oldValue?.iq) ? oldValue.iq : null;
+    const newIq = Number.isFinite(newValue?.iq) ? newValue.iq : null;
     if (oldIq === newIq) continue;
 
     let kind = "changed";
@@ -266,10 +292,11 @@ export function compareSnapshots(previous, current, threshold = 0) {
 
     changes.push({
       key,
-      scope: newValue.scope,
-      modelId: newValue.modelId,
-      modelLabel: newValue.modelLabel,
-      effort: newValue.effort,
+      scope: value.scope,
+      modelId: value.modelId,
+      modelLabel: value.modelLabel,
+      runtimeLabel: value.runtimeLabel,
+      effort: value.effort,
       oldIq,
       newIq,
       delta,
@@ -313,9 +340,12 @@ export function normalizeSettings(value) {
 }
 
 export function formatChangeLabel(change) {
+  const modelLabel = change.runtimeLabel
+    ? `${change.modelLabel} · ${change.runtimeLabel}`
+    : change.modelLabel;
   const target = change.effort
-    ? `${change.modelLabel} ${change.effort}`
-    : `${change.modelLabel} 总体`;
+    ? `${modelLabel} ${change.effort}`
+    : `${modelLabel} 总体`;
   if (change.kind === "available") return `${target}：新增 ${change.newIq} IQ`;
   if (change.kind === "unavailable") return `${target}：暂无数据`;
   const sign = change.delta > 0 ? "+" : "";

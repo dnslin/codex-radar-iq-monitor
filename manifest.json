@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Codex Radar IQ Monitor",
   "short_name": "Radar IQ",
-  "version": "0.2.0",
-  "description": "后台汇总 Codex Radar 六个模型各思考等级的 IQ，并在分数变化时提醒。",
+  "version": "0.6.0",
+  "description": "自动同步 Codex Radar 的模型与思考等级 IQ，支持搜索、按运行工具筛选和分数变化提醒。",
   "minimum_chrome_version": "120",
   "permissions": [
     "alarms",

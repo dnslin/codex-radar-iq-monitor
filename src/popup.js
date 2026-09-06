@@ -351,7 +351,7 @@ function renderProviderNavigation(groups, matchingModels) {
       const label = element("span", "provider-label", option.label);
       const count = element("span", "provider-count");
       count.setAttribute("aria-hidden", "true");
-      button.append(label, count);
+      button.append(createProviderIcon(option.id), label, count);
       view = { button, count };
       providerButtons.set(option.id, view);
     }
@@ -361,6 +361,21 @@ function renderProviderNavigation(groups, matchingModels) {
     view.button.setAttribute("aria-label", `${option.label}，${option.matches} 个匹配模型，共 ${option.count} 个`);
     if (providerNav.children[index] !== view.button) providerNav.insertBefore(view.button, providerNav.children[index] ?? null);
   });
+}
+
+function createProviderIcon(providerId) {
+  const id = providerId || "all";
+  const icon = element("span", "provider-icon");
+  icon.dataset.provider = id;
+  icon.setAttribute("aria-hidden", "true");
+  icon.classList.toggle("provider-icon--monochrome", ["openai", "xai", "zhipu", "all", "other"].includes(id));
+  const image = document.createElement("img");
+  image.src = `../icons/providers/${id}.svg`;
+  image.alt = "";
+  image.width = 18;
+  image.height = 18;
+  icon.append(image);
+  return icon;
 }
 
 function createProviderSection(group) {
@@ -373,7 +388,7 @@ function createProviderSection(group) {
   const company = element("span", "provider-company", group.company);
   company.hidden = !group.company || group.company === group.label;
   const count = element("span", "provider-group-count");
-  heading.append(name, company, count);
+  heading.append(createProviderIcon(group.id), name, company, count);
   const rows = element("div", "provider-models");
   section.append(heading, rows);
   return { section, rows, count };

@@ -10,10 +10,10 @@
 node scripts/verify-popup.mjs
 ```
 
-发布前应解压实际 ZIP，再把解压目录传给同一个检查脚本。可选的第二个参数保存“全部厂商”的深色真实弹窗截图，同时在相同目录生成带 `-deepseek-light.png` 后缀的 DeepSeek 浅色详情截图：
+发布前应解压实际 ZIP，再把解压目录传给同一个检查脚本。可选的第二个参数保存“全部厂商”的深色真实弹窗截图，同时在相同目录生成带 `-all-light.png` 后缀的全部厂商浅色截图，以及带 `-deepseek-light.png` 后缀的 DeepSeek 浅色详情截图：
 
 ```bash
-unzip dist/codex-radar-iq-monitor-v0.7.0.zip -d /tmp/radar-release-check
+unzip dist/codex-radar-iq-monitor-v0.8.0.zip -d /tmp/radar-release-check
 node scripts/verify-popup.mjs /tmp/radar-release-check /tmp/radar-popup.png
 ```
 
@@ -28,5 +28,10 @@ node scripts/verify-popup.mjs /tmp/radar-release-check /tmp/radar-popup.png
 - 按名称排序只改变各组内的模型顺序，保留厂商分组顺序。
 - 空结果提供清空入口，点击后清除搜索并恢复“全部厂商”。
 - 深浅主题切换，以及模型行展开后详情可见。
+- 厂商导航和组标题使用对应的本地 SVG，图像已加载，图标带 `aria-hidden="true"` 且图片 `alt` 为空，避免屏幕阅读器重复读品牌名称；全部及其他分类使用通用图标。
+- 深浅主题下，厂商导航全部可见，正文、导航和次级文字的计算颜色与实际叠加背景达到至少 4.5:1 对比度。输出会报告最低对比度。
+- 通过真实 Tab 按键检查导航焦点，焦点轮廓至少为 2px，与背景对比度至少为 3:1；同时覆盖未选中、选中及悬停状态。内缩轮廓使用按钮自身背景计算对比度。
+
+颜色检查覆盖列出的界面文字及实体背景颜色。品牌图形本身不作为文字检查，完整视觉效果仍需查看保存的真实截图。
 
 模型数量来自接口，不固定为 18。DeepSeek 与 Claude 的期望记录按实时模型名称取得，不固定每组数量。检查需要源站仍提供这两家的记录；接口不可用或模型数据在 30 秒内未加载会使检查失败，并显示页面中的错误。尺寸回归时仍会保存截图；尺寸正常时，截图等待模型加载后再保存。

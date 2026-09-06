@@ -19,6 +19,7 @@
   | Claude Code | Claude Sonnet 5、Claude Opus 5（内测中）|
 
 - 按模型厂商分组：ChatGPT / OpenAI、DeepSeek、Claude / Anthropic、Gemini / Google、Grok / xAI、Kimi / 月之暗面、GLM / 智谱、混元 / 腾讯。左侧分类可快速切换，选择“全部厂商”时，右侧列表仍按厂商分段展示。
+- 分类导航和分组标题配有品牌图标，使用石墨灰深色主题、雾白浅色主题和蓝色选中状态。图标随扩展本地打包，无需联网加载；来源与许可见 [图标说明](icons/providers/README.md)。
 - 同厂商使用不同运行工具的模型归入同一组，各自保留 IQ 和工具标记。例如 Codex 与 DSH 测得的 DeepSeek 分数不会合并计算。无法识别厂商的新模型显示在“其他”组，仍可正常查看。
 - 用紧凑列表展示总体 IQ，点击模型行展开各思考等级的 IQ、样本量和相对上次快照的变化。
 - 支持搜索模型、厂商或运行工具，识别 OpenAI、Anthropic、深度求索等名称。可结合厂商和运行工具筛选，按 IQ、站点顺序或名称在厂商组内排序。筛选只影响查看范围，后台仍监听全部模型。
@@ -90,14 +91,14 @@ npm run smoke
 本地可以按 Chrome 扩展版本号生成发布包：
 
 ```bash
-npm run package -- v0.7.0
+npm run package -- v0.8.0
 ```
 
 输出文件：
 
 ```text
-dist/codex-radar-iq-monitor-v0.7.0.zip
-dist/codex-radar-iq-monitor-v0.7.0.zip.sha256
+dist/codex-radar-iq-monitor-v0.8.0.zip
+dist/codex-radar-iq-monitor-v0.8.0.zip.sha256
 ```
 
 推送形如 `v0.3.0` 的 tag 后，`.github/workflows/release.yml` 会自动：

@@ -56,6 +56,10 @@ IQ               = round(weighted_score / weighted_samples × 150)
 
 首次安装后扩展会立即获取一次数据。打开弹窗即可搜索、筛选模型，并展开查看思考等级。列表可独立滚动，顶部搜索和底部监听设置始终可用。没有样本的档位显示“待采样”，不显示为零分。
 
+### 更新已解压安装的扩展
+
+GitHub 下载的 ZIP 不会自动更新已加载的扩展。下载新版本后，将解压出的文件覆盖到 Chrome 当前加载的原目录，再到 `chrome://extensions/` 点击这款扩展的“重新加载”。确认管理页显示的新版本号，然后重新打开工具栏弹窗。沿用原目录可以保留监听设置和主题偏好。
+
 ## 权限说明
 
 | 权限 | 用途 |
@@ -77,20 +81,21 @@ npm run smoke
 
 - `npm run check`：Manifest、发布脚本、JavaScript 语法和单元测试检查。
 - `npm run smoke`：请求实时接口，打印全部模型、运行工具及实际思考等级的 IQ 矩阵。
+- `node scripts/verify-popup.mjs`：在独立 Chrome 窗口验证真实工具栏弹窗的自然尺寸、模型数量、搜索和展开交互；前置条件及发布包验收方法见 [弹窗验证说明](docs/popup-verification.md)。
 
 ## 打包与发布
 
 本地可以按 Chrome 扩展版本号生成发布包：
 
 ```bash
-npm run package -- v0.6.0
+npm run package -- v0.6.1
 ```
 
 输出文件：
 
 ```text
-dist/codex-radar-iq-monitor-v0.6.0.zip
-dist/codex-radar-iq-monitor-v0.6.0.zip.sha256
+dist/codex-radar-iq-monitor-v0.6.1.zip
+dist/codex-radar-iq-monitor-v0.6.1.zip.sha256
 ```
 
 推送形如 `v0.3.0` 的 tag 后，`.github/workflows/release.yml` 会自动：

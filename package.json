@@ -1,10 +1,10 @@
 {
   "name": "codex-radar-iq-monitor",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node scripts/validate.mjs && node --check scripts/package.mjs && node --check scripts/publish-chrome-web-store.mjs && node --check src/radar.js && node --check src/view.js && node --check src/theme.js && node --check src/background.js && node --check src/popup.js && node --test",
+    "check": "node scripts/validate.mjs && node --check scripts/package.mjs && node --check scripts/publish-chrome-web-store.mjs && node --check scripts/verify-popup.mjs && node --check src/radar.js && node --check src/view.js && node --check src/theme.js && node --check src/background.js && node --check src/popup.js && node --test",
     "test": "node --test",
     "smoke": "node scripts/smoke.mjs",
     "package": "node scripts/package.mjs",

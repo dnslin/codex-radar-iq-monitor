@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Codex Radar IQ Monitor",
   "short_name": "Radar IQ",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "按厂商查看 Codex Radar 模型 IQ，支持模型搜索、运行工具筛选、思考等级详情和分数变化提醒。",
   "minimum_chrome_version": "120",
   "permissions": [

@@ -58,34 +58,183 @@ function assertLayout(layout) {
   assert.ok(layout.listOverflow <= 1, "model list must not overflow horizontally");
 }
 
-async function capturePopup(target, outputPath = screenshotPath) {
+async function popupCommand(target, method, params) {
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   try {
-    const data = await new Promise((resolveImage, reject) => {
-      const timeout = setTimeout(() => reject(new Error("Popup screenshot timed out")), 10_000);
+    return await new Promise((resolveResult, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`Popup ${method} timed out`)), 10_000);
       socket.addEventListener("error", (error) => {
         clearTimeout(timeout);
         reject(error);
       });
       socket.addEventListener("open", () => {
-        socket.send(JSON.stringify({ id: 1, method: "Page.captureScreenshot", params: { format: "png" } }));
+        socket.send(JSON.stringify({ id: 1, method, params }));
       });
       socket.addEventListener("message", ({ data: message }) => {
         const response = JSON.parse(message);
         if (response.id !== 1) return;
         clearTimeout(timeout);
         if (response.error) reject(new Error(response.error.message));
-        else resolveImage(response.result.data);
+        else resolveResult(response.result);
       });
     });
-    await mkdir(dirname(outputPath), { recursive: true });
-    await writeFile(outputPath, Buffer.from(data, "base64"));
-    console.log(`Toolbar popup screenshot: ${outputPath}`);
   } finally {
     socket.close();
   }
 }
 
+async function capturePopup(target, outputPath = screenshotPath) {
+  const { data } = await popupCommand(target, "Page.captureScreenshot", { format: "png" });
+  await mkdir(dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, Buffer.from(data, "base64"));
+  console.log(`Toolbar popup screenshot: ${outputPath}`);
+}
+
+function screenshotVariant(suffix) {
+  return `${screenshotPath.slice(0, screenshotPath.length - extname(screenshotPath).length)}-${suffix}.png`;
+}
+
+async function assertProviderIcons() {
+  const icons = inPopup((view) => {
+    const doc = view.document;
+    const entries = [
+      ...[...doc.querySelectorAll("#provider-nav button")].map((element) => ({ element, provider: element.dataset.provider || "all", location: "navigation" })),
+      ...[...doc.querySelectorAll(".provider-group-heading")].map((element) => ({ element, provider: element.closest(".provider-group").dataset.provider, location: "group heading" })),
+    ];
+    return entries.map(({ element, provider, location }) => {
+      const icon = element.querySelector(".provider-icon");
+      const image = icon?.querySelector("img");
+      const box = icon?.getBoundingClientRect();
+      return {
+        provider, location,
+        exists: Boolean(icon),
+        hiddenFromReader: icon?.getAttribute("aria-hidden") === "true" && image?.getAttribute("alt") === "",
+        source: image?.currentSrc,
+        loaded: Boolean(image?.complete && image.naturalWidth > 0),
+        width: box?.width,
+        height: box?.height,
+      };
+    });
+  });
+  assert.ok(icons.length > 0, "provider navigation and headings must have icons");
+  for (const icon of icons) {
+    const label = `${icon.provider} ${icon.location}`;
+    assert.equal(icon.exists, true, `${label} must contain a provider icon`);
+    assert.equal(icon.hiddenFromReader, true, `${label} icon must not repeat the provider name to screen readers`);
+    assert.equal(icon.loaded, true, `${label} SVG must load successfully`);
+    const source = new URL(icon.source);
+    assert.equal(source.protocol, "chrome-extension:", `${label} icon must be local`);
+    assert.equal(source.pathname, `/icons/providers/${icon.provider}.svg`, `${label} must use its matching brand asset`);
+    assert.ok(icon.width >= 16 && icon.height >= 16, `${label} icon must be visible at a usable size`);
+    const svg = await readFile(resolve(extensionPath, `icons/providers/${icon.provider}.svg`), "utf8");
+    assert.match(svg, /<svg\b/, `${label} asset must be an SVG`);
+  }
+}
+
+function appearanceState(view) {
+  const doc = view.document;
+  const rgba = (color) => {
+    const values = color.match(/[\d.]+/g).map(Number);
+    return [values[0], values[1], values[2], values[3] ?? 1];
+  };
+  const over = (foreground, background) => foreground.slice(0, 3).map((channel, index) => channel * foreground[3] + background[index] * (1 - foreground[3]));
+  const background = (element) => {
+    const layers = [];
+    for (let ancestor = element; ancestor; ancestor = ancestor.parentElement) {
+      layers.push(rgba(view.getComputedStyle(ancestor).backgroundColor));
+    }
+    return layers.reverse().reduce((result, layer) => over(layer, result), [255, 255, 255]);
+  };
+  const selectors = [
+    ".brand h1", "#status-text", ".section-heading h2", ".section-heading p", "#dataset-meta",
+    "#provider-nav .provider-label", "#provider-nav .provider-count", ".sidebar-heading", ".list-heading > span",
+    ".provider-group-name", ".provider-company", ".provider-group-count", ".model-name", ".runtime-badge",
+    ".effort-count", ".coverage-note", ".model-status", ".model-score", ".sample-count", ".coverage-count", ".delta",
+    ".effort-table th", ".effort-score", ".settings-panel > summary", "#source-time", "footer a",
+    "#theme-label", "#refresh-button > span:last-child", "#runtime-filter", "#model-sort",
+  ];
+  const text = [...doc.querySelectorAll(selectors.join(","))]
+    .filter((element) => element.getClientRects().length && !element.closest("[hidden]") && element.textContent.trim())
+    .map((element) => {
+      const style = view.getComputedStyle(element);
+      const base = background(element);
+      return { text: element.textContent.trim().slice(0, 60), selector: element.id || element.className || element.tagName, foreground: over(rgba(style.color), base), background: base };
+    });
+  const searchInput = doc.querySelector("#model-search");
+  const searchBackground = background(searchInput);
+  text.push({ text: searchInput.placeholder, selector: "model-search::placeholder", foreground: over(rgba(view.getComputedStyle(searchInput, "::placeholder").color), searchBackground), background: searchBackground });
+  const nav = doc.querySelector("#provider-nav");
+  const navBox = nav.getBoundingClientRect();
+  const buttons = [...nav.querySelectorAll("button")].map((button) => {
+    const box = button.getBoundingClientRect();
+    return { provider: button.dataset.provider || "all", top: box.top, bottom: box.bottom, navTop: navBox.top, navBottom: navBox.bottom, fullyVisible: box.top >= navBox.top - 1 && box.bottom <= navBox.bottom + 1 && box.left >= navBox.left - 1 && box.right <= navBox.right + 1 };
+  });
+  const focused = doc.activeElement;
+  const focusStyle = view.getComputedStyle(focused);
+  const focusBackground = background(parseFloat(focusStyle.outlineOffset) < 0 ? focused : focused.parentElement || focused);
+  return {
+    text, buttons,
+    focus: {
+      inNavigation: Boolean(focused.closest("#provider-nav")),
+      visible: focused.matches(":focus-visible"),
+      width: parseFloat(focusStyle.outlineWidth),
+      style: focusStyle.outlineStyle,
+      foreground: over(rgba(focusStyle.outlineColor), focusBackground),
+      background: focusBackground,
+    },
+  };
+}
+
+function contrastRatio(foreground, background) {
+  const luminance = (color) => color.map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  }).reduce((result, value, index) => result + value * [0.2126, 0.7152, 0.0722][index], 0);
+  const first = luminance(foreground);
+  const second = luminance(background);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+function assertFocus(focus, label) {
+  assert.equal(focus.inNavigation && focus.visible, true, `${label} keyboard focus must be visible in provider navigation`);
+  assert.ok(focus.width >= 2 && focus.style !== "none", `${label} keyboard focus needs at least a 2px outline`);
+  const ratio = contrastRatio(focus.foreground, focus.background);
+  assert.ok(ratio >= 3, `${label} focus outline has insufficient contrast: ${ratio.toFixed(2)}:1`);
+  return ratio;
+}
+
+async function assertAppearance(target, theme) {
+  setTheme(theme);
+  inPopup((view) => {
+    view.document.querySelector('#provider-nav button[data-provider=""]').focus();
+    return true;
+  });
+  const tab = { key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 };
+  await popupCommand(target, "Input.dispatchKeyEvent", { type: "keyDown", ...tab });
+  await popupCommand(target, "Input.dispatchKeyEvent", { type: "keyUp", ...tab });
+  const appearance = inPopup(appearanceState);
+  const ratios = appearance.text.map((sample) => {
+    const ratio = contrastRatio(sample.foreground, sample.background);
+    assert.ok(ratio >= 4.5, `${theme} text ${sample.selector} (${sample.text}) has insufficient contrast: ${ratio.toFixed(2)}:1`);
+    return ratio;
+  });
+  assert.ok(ratios.length > 0, "text contrast check must include rendered text");
+  for (const button of appearance.buttons) assert.equal(button.fullyVisible, true, `${theme} ${button.provider} navigation must be fully visible (button ${button.top}–${button.bottom}, navigation ${button.navTop}–${button.navBottom})`);
+  const focusRatios = [assertFocus(appearance.focus, `${theme} unselected`)];
+  const selectedPoint = inPopup((view) => {
+    const button = view.document.querySelector('#provider-nav button[aria-pressed="true"]');
+    button.focus();
+    const box = button.getBoundingClientRect();
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  });
+  focusRatios.push(assertFocus(inPopup(appearanceState).focus, `${theme} selected`));
+  await popupCommand(target, "Input.dispatchMouseEvent", { type: "mouseMoved", ...selectedPoint });
+  focusRatios.push(assertFocus(inPopup(appearanceState).focus, `${theme} selected hover`));
+  await popupCommand(target, "Input.dispatchMouseEvent", { type: "mouseMoved", x: 710, y: 70 });
+  assertLayout(inPopup(measure));
+  inPopup((view) => { view.document.activeElement.blur(); return true; });
+  console.log(`${theme} appearance: ${ratios.length} text samples, minimum ${Math.min(...ratios).toFixed(2)}:1 contrast, ${appearance.buttons.length} navigation buttons visible, minimum focus ${Math.min(...focusRatios).toFixed(2)}:1 across unselected/selected/hover states.`);
+}
 function providerState(view) {
   const doc = view.document;
   return {
@@ -199,8 +348,12 @@ try {
     assert.ok(group, `all view must contain a ${provider} group`);
     assert.deepEqual(group.rows.map(({ id }) => id).sort(), expected.map(({ id }) => id).sort(), `${provider} group must contain its models across all runtimes only`);
   }
-  setTheme("dark");
+  await waitFor((view) => [...view.document.querySelectorAll(".provider-icon img")].every((image) => image.complete), "provider SVG assets");
+  await assertProviderIcons();
+  await assertAppearance(popup, "dark");
   if (screenshotPath) await capturePopup(popup);
+  await assertAppearance(popup, "light");
+  if (screenshotPath) await capturePopup(popup, screenshotVariant("all-light"));
 
   const query = models[0].label;
   search(query);
@@ -225,11 +378,9 @@ try {
   });
   assert.equal(expanded.open, true, "model summary must expand");
   assert.ok(expanded.contentHeight > 0, "expanded model details must be visible");
-  setTheme("light");
-  assertLayout(inPopup(measure));
+  await assertAppearance(popup, "light");
   if (screenshotPath) {
-    const detailPath = `${screenshotPath.slice(0, screenshotPath.length - extname(screenshotPath).length)}-deepseek-light.png`;
-    await capturePopup(popup, detailPath);
+    await capturePopup(popup, screenshotVariant("deepseek-light"));
   }
 
   selectProvider("anthropic");
@@ -265,7 +416,7 @@ try {
   assert.equal(clearedQuery, "", "clear action must remove the search query");
   assertVisibleModels(models, "");
   assertLayout(inPopup(measure));
-  console.log(`Passed: natural 720×600 toolbar popup, ${models.length} source models, provider groups/navigation, refresh retention, provider aliases, group sorting, empty-result reset, themes, expand, and no horizontal overflow.`);
+  console.log(`Passed: natural 720×600 toolbar popup, ${models.length} source models, local accessible brand icons, theme contrast/focus, provider groups/navigation, refresh retention, provider aliases, group sorting, empty-result reset, expand, and no horizontal overflow.`);
 } finally {
   browser(["close"]);
 }

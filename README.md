@@ -18,8 +18,10 @@
   | CodeBuddy | HY4 Preview |
   | Claude Code | Claude Sonnet 5、Claude Opus 5（内测中）|
 
+- 按模型厂商分组：ChatGPT / OpenAI、DeepSeek、Claude / Anthropic、Gemini / Google、Grok / xAI、Kimi / 月之暗面、GLM / 智谱、混元 / 腾讯。左侧分类可快速切换，选择“全部厂商”时，右侧列表仍按厂商分段展示。
+- 同厂商使用不同运行工具的模型归入同一组，各自保留 IQ 和工具标记。例如 Codex 与 DSH 测得的 DeepSeek 分数不会合并计算。无法识别厂商的新模型显示在“其他”组，仍可正常查看。
 - 用紧凑列表展示总体 IQ，点击模型行展开各思考等级的 IQ、样本量和相对上次快照的变化。
-- 支持搜索模型或运行工具、按运行工具筛选，以及按 IQ、站点顺序或名称排序。筛选只影响查看范围，后台仍监听全部模型。
+- 支持搜索模型、厂商或运行工具，识别 OpenAI、Anthropic、深度求索等名称。可结合厂商和运行工具筛选，按 IQ、站点顺序或名称在厂商组内排序。筛选只影响查看范围，后台仍监听全部模型。
 - 显示已测题数和样本量，已测题目不足题库的 60% 时提示“样本覆盖不足”，与源站标准一致。
 - 默认每 15 分钟在后台更新，也可改为 5、30 或 60 分钟。
 - 支持手动刷新。
@@ -54,7 +56,7 @@ IQ               = round(weighted_score / weighted_samples × 150)
 
 5. 固定工具栏中的 **Codex Radar IQ Monitor** 图标。
 
-首次安装后扩展会立即获取一次数据。打开弹窗即可搜索、筛选模型，并展开查看思考等级。列表可独立滚动，顶部搜索和底部监听设置始终可用。没有样本的档位显示“待采样”，不显示为零分。
+首次安装后扩展会立即获取一次数据。打开弹窗后，从左侧选择厂商，或在全部厂商中搜索模型，再展开查看思考等级。分类导航和模型列表可分别滚动，顶部搜索和底部监听设置始终可用。没有样本的档位显示“待采样”，不显示为零分。
 
 ### 更新已解压安装的扩展
 
@@ -88,14 +90,14 @@ npm run smoke
 本地可以按 Chrome 扩展版本号生成发布包：
 
 ```bash
-npm run package -- v0.6.1
+npm run package -- v0.7.0
 ```
 
 输出文件：
 
 ```text
-dist/codex-radar-iq-monitor-v0.6.1.zip
-dist/codex-radar-iq-monitor-v0.6.1.zip.sha256
+dist/codex-radar-iq-monitor-v0.7.0.zip
+dist/codex-radar-iq-monitor-v0.7.0.zip.sha256
 ```
 
 推送形如 `v0.3.0` 的 tag 后，`.github/workflows/release.yml` 会自动：

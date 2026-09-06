@@ -9,7 +9,7 @@ import {
   normalizeThemeMode,
   resolveTheme,
 } from "./theme.js";
-import { hasLowCoverage, isNumber, runtimeOptions, selectModels, valueDelta } from "./view.js";
+import { hasLowCoverage, isNumber, providerGroups, runtimeOptions, selectModels, valueDelta } from "./view.js";
 
 const statusText = document.querySelector("#status-text");
 const themeButton = document.querySelector("#theme-button");
@@ -23,6 +23,7 @@ const modelScroll = document.querySelector("#model-scroll");
 const modelSearch = document.querySelector("#model-search");
 const runtimeFilter = document.querySelector("#runtime-filter");
 const modelSort = document.querySelector("#model-sort");
+const providerNav = document.querySelector("#provider-nav");
 const resultCount = document.querySelector("#result-count");
 const resultsStatus = document.querySelector("#results-status");
 const emptyState = document.querySelector("#empty-state");
@@ -41,7 +42,10 @@ let currentThemeMode = "auto";
 let settingsStatusTimer = null;
 let autoThemeTimer = null;
 let renderedData = "";
+let currentProvider = "";
 const modelRows = new Map();
+const providerSections = new Map();
+const providerButtons = new Map();
 
 const numberFormatter = new Intl.NumberFormat("zh-CN", {
   maximumFractionDigits: 1,
@@ -324,6 +328,57 @@ function updateRuntimeFilter(models) {
   runtimeFilter.value = options.some((option) => option.value === previousValue) ? previousValue : "";
 }
 
+function renderProviderNavigation(groups, matchingModels) {
+  const matches = new Map(providerGroups(matchingModels).map((group) => [group.id, group.models.length]));
+  const total = groups.reduce((count, group) => count + group.models.length, 0);
+  const options = [
+    { id: "", label: "全部厂商", company: "", count: total, matches: matchingModels.length },
+    ...groups.map((group) => ({ ...group, count: group.models.length, matches: matches.get(group.id) ?? 0 })),
+  ];
+  const ids = new Set(options.map((option) => option.id));
+  for (const [id, view] of providerButtons) {
+    if (!ids.has(id)) {
+      view.button.remove();
+      providerButtons.delete(id);
+    }
+  }
+  options.forEach((option, index) => {
+    let view = providerButtons.get(option.id);
+    if (!view) {
+      const button = element("button", "provider-button");
+      button.type = "button";
+      button.dataset.provider = option.id;
+      const label = element("span", "provider-label", option.label);
+      const count = element("span", "provider-count");
+      count.setAttribute("aria-hidden", "true");
+      button.append(label, count);
+      view = { button, count };
+      providerButtons.set(option.id, view);
+    }
+    view.count.textContent = option.matches === option.count ? String(option.count) : `${option.matches}/${option.count}`;
+    view.button.title = option.company || option.label;
+    view.button.setAttribute("aria-pressed", String(currentProvider === option.id));
+    view.button.setAttribute("aria-label", `${option.label}，${option.matches} 个匹配模型，共 ${option.count} 个`);
+    if (providerNav.children[index] !== view.button) providerNav.insertBefore(view.button, providerNav.children[index] ?? null);
+  });
+}
+
+function createProviderSection(group) {
+  const section = element("section", "provider-group");
+  section.dataset.provider = group.id;
+  const heading = element("h3", "provider-group-heading");
+  heading.id = `provider-heading-${group.id}`;
+  section.setAttribute("aria-labelledby", heading.id);
+  const name = element("span", "provider-group-name", group.label);
+  const company = element("span", "provider-company", group.company);
+  company.hidden = !group.company || group.company === group.label;
+  const count = element("span", "provider-group-count");
+  heading.append(name, company, count);
+  const rows = element("div", "provider-models");
+  section.append(heading, rows);
+  return { section, rows, count };
+}
+
 function renderEmptyState(visibleCount) {
   emptyState.hidden = visibleCount > 0;
   if (visibleCount) return;
@@ -352,15 +407,29 @@ function renderEmptyState(visibleCount) {
 function renderModels({ updateData = false, resetScroll = false } = {}) {
   const models = currentState?.snapshot?.models ?? [];
   const previousModels = modelMap(currentState?.previousSnapshot);
+  const groups = providerGroups(models);
+  if (currentProvider && !groups.some((group) => group.id === currentProvider)) currentProvider = "";
+  const filters = { query: modelSearch.value, runtime: runtimeFilter.value, sort: modelSort.value };
   const visible = selectModels(models, {
-    query: modelSearch.value,
-    runtime: runtimeFilter.value,
-    sort: modelSort.value,
+    ...filters,
+    provider: currentProvider,
   });
+  const visibleGroups = providerGroups(visible);
   const visibleIds = new Set(visible.map((model) => model.id));
   const currentIds = new Set(models.map((model) => model.id));
   const focused = document.activeElement;
   const scrollTop = modelScroll.scrollTop;
+
+  renderProviderNavigation(groups, selectModels(models, filters));
+
+  for (const [id, view] of providerSections) {
+    if (!groups.some((group) => group.id === id)) {
+      view.section.remove();
+      providerSections.delete(id);
+    } else {
+      view.section.hidden = !visibleGroups.some((group) => group.id === id);
+    }
+  }
 
   for (const [id, view] of modelRows) {
     if (!currentIds.has(id)) {
@@ -371,27 +440,40 @@ function renderModels({ updateData = false, resetScroll = false } = {}) {
     }
   }
 
-  visible.forEach((model, index) => {
-    let view = modelRows.get(model.id);
-    const isNew = !view;
-    if (isNew) {
-      view = createModelRow(model);
-      modelRows.set(model.id, view);
+  visibleGroups.forEach((group, groupIndex) => {
+    let section = providerSections.get(group.id);
+    if (!section) {
+      section = createProviderSection(group);
+      providerSections.set(group.id, section);
     }
-    const previous = previousModels.get(model.id);
-    if (updateData || isNew || view.model !== model || view.previous !== previous) {
-      updateModelRow(view, model, previous);
-    }
-    view.row.hidden = false;
-    if (modelList.children[index] !== view.row) modelList.insertBefore(view.row, modelList.children[index] ?? null);
+    section.section.hidden = false;
+    section.count.textContent = `${group.models.length} 个模型`;
+    if (modelList.children[groupIndex] !== section.section) modelList.insertBefore(section.section, modelList.children[groupIndex] ?? null);
+
+    group.models.forEach((model, index) => {
+      let view = modelRows.get(model.id);
+      const isNew = !view;
+      if (isNew) {
+        view = createModelRow(model);
+        modelRows.set(model.id, view);
+      }
+      const previous = previousModels.get(model.id);
+      if (updateData || isNew || view.model !== model || view.previous !== previous) {
+        updateModelRow(view, model, previous);
+      }
+      view.row.hidden = false;
+      if (section.rows.children[index] !== view.row) section.rows.insertBefore(view.row, section.rows.children[index] ?? null);
+    });
   });
 
   if (focused instanceof HTMLElement && focused.isConnected && !focused.closest("[hidden]") && document.activeElement !== focused) {
     focused.focus({ preventScroll: true });
   }
   modelScroll.scrollTop = resetScroll ? 0 : scrollTop;
-  resultCount.textContent = `${visible.length} / ${models.length} 个模型`;
-  resultsStatus.textContent = `显示 ${visible.length} 个模型，共 ${models.length} 个`;
+  const selectedGroup = groups.find((group) => group.id === currentProvider);
+  const total = selectedGroup ? selectedGroup.models.length : models.length;
+  resultCount.textContent = `${visible.length} / ${total} 个模型`;
+  resultsStatus.textContent = `${selectedGroup?.label ?? "全部厂商"}，显示 ${visible.length} 个模型，共 ${total} 个`;
   renderEmptyState(visible.length);
 }
 
@@ -402,7 +484,7 @@ function renderMetadata(snapshot) {
     return;
   }
 
-  datasetMeta.textContent = `${snapshot.models.length} 模型 · ${runtimeOptions(snapshot.models).length} 运行工具 · ${snapshot.taskCount} 任务`;
+  datasetMeta.textContent = `${providerGroups(snapshot.models).length} 厂商 · ${snapshot.models.length} 模型 · ${snapshot.taskCount} 任务`;
   const source = snapshot.sourceUpdatedAt
     ? `站点快照 ${formatDateTime(snapshot.sourceUpdatedAt)}`
     : "站点快照时间未知";
@@ -423,6 +505,7 @@ function renderState(state) {
       query: modelSearch.value,
       runtime: runtimeFilter.value,
       sort: modelSort.value,
+      provider: currentProvider,
     }).length);
   }
   renderMetadata(state?.snapshot);
@@ -512,9 +595,16 @@ refreshButton.addEventListener("click", refreshNow);
 modelSearch.addEventListener("input", () => renderModels({ resetScroll: true }));
 runtimeFilter.addEventListener("change", () => renderModels({ resetScroll: true }));
 modelSort.addEventListener("change", () => renderModels({ resetScroll: true }));
+providerNav.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-provider]");
+  if (!button) return;
+  currentProvider = button.dataset.provider;
+  renderModels({ resetScroll: true });
+});
 clearFilters.addEventListener("click", () => {
   modelSearch.value = "";
   runtimeFilter.value = "";
+  currentProvider = "";
   renderModels({ resetScroll: true });
   modelSearch.focus();
 });

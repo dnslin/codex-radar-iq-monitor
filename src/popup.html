@@ -39,8 +39,8 @@
       <section class="overview" aria-labelledby="overview-title">
         <div class="section-heading">
           <div>
-            <h2 id="overview-title">模型总览</h2>
-            <p>所有思考等级的加权 IQ · 展开模型查看详情</p>
+            <h2 id="overview-title">模型目录</h2>
+            <p>按厂商集中查看 · 点击模型展开思考等级</p>
           </div>
           <span id="dataset-meta" class="dataset-meta"></span>
         </div>
@@ -50,7 +50,7 @@
               <circle cx="8.5" cy="8.5" r="5.5" />
               <path d="m13 13 4 4" />
             </svg>
-            <input id="model-search" type="search" aria-label="搜索模型或运行工具" placeholder="搜索模型或运行工具" autocomplete="off" />
+            <input id="model-search" type="search" aria-label="搜索模型、厂商或运行工具" placeholder="搜索模型、厂商或运行工具" autocomplete="off" />
           </label>
           <label class="filter-select">
             <span class="sr-only">运行工具</span>
@@ -59,27 +59,35 @@
             </select>
           </label>
           <label class="filter-select sort-select">
-            <span class="sr-only">排序方式</span>
-            <select id="model-sort">
-              <option value="iq">IQ 从高到低</option>
-              <option value="site">源站顺序</option>
-              <option value="name">模型名称</option>
+            <span class="sr-only">厂商组内排序</span>
+            <select id="model-sort" title="每个厂商组内的模型排序">
+              <option value="iq">组内 IQ 从高到低</option>
+              <option value="site">组内源站顺序</option>
+              <option value="name">组内模型名称</option>
             </select>
           </label>
         </div>
-        <div class="list-heading row-layout" aria-hidden="true">
-          <span id="result-count">模型 / 运行工具</span>
-          <span>总体 IQ</span>
-          <span>样本</span>
-          <span title="与上次成功获取的快照对比">较上次</span>
-          <span></span>
-        </div>
-        <div id="model-scroll" class="model-scroll" tabindex="0" role="region" aria-label="模型列表">
-          <div id="model-list" class="model-list"></div>
-          <div id="empty-state" class="empty-state" hidden>
-            <strong id="empty-title">正在获取模型数据…</strong>
-            <p id="empty-description">首次获取可能需要几秒钟。</p>
-            <button id="clear-filters" class="text-button" type="button" hidden>清空筛选</button>
+        <div class="catalog">
+          <aside class="provider-sidebar" aria-label="厂商分类">
+            <span class="sidebar-heading">模型厂商</span>
+            <nav id="provider-nav" class="provider-nav" aria-label="按厂商查看模型"></nav>
+          </aside>
+          <div class="model-pane">
+            <div class="list-heading row-layout" aria-hidden="true">
+              <span id="result-count">模型 / 运行工具</span>
+              <span>总体 IQ</span>
+              <span>样本</span>
+              <span title="与上次成功获取的快照对比">较上次</span>
+              <span></span>
+            </div>
+            <div id="model-scroll" class="model-scroll" tabindex="0" role="region" aria-label="模型列表">
+              <div id="model-list" class="model-list"></div>
+              <div id="empty-state" class="empty-state" hidden>
+                <strong id="empty-title">正在获取模型数据…</strong>
+                <p id="empty-description">首次获取可能需要几秒钟。</p>
+                <button id="clear-filters" class="text-button" type="button" hidden>清空筛选</button>
+              </div>
+            </div>
           </div>
         </div>
         <p id="results-status" class="sr-only" role="status"></p>

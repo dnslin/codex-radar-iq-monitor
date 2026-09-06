@@ -4,15 +4,23 @@
 
 ## 功能
 
-- 汇总以下 6 个模型：
-  - GPT-5.6 Sol
-  - GPT-5.6 Terra
-  - GPT-5.6 Luna
-  - GPT-5.5
-  - DeepSeek V4 Pro
-  - DeepSeek V4 Flash
-- 展示 `low`、`medium`、`high`、`xhigh`、`max`、`ultra` 各思考等级的 IQ。
-- 展示每个模型跨思考等级的总体 IQ。
+- 自动读取 DeepSWE 接口中的所有模型与思考等级，源站新增模型后随刷新同步，无需修改固定名单。
+- 截至 2026-09-06，支持 18 条运行工具与模型记录、64 个思考档位：
+
+  | 运行工具 | 模型 |
+  |---|---|
+  | Codex | GPT-6 Astra、GPT-5.6 Sol / Terra / Luna、GPT-5.5、DeepSeek V4 Pro / Flash |
+  | DSH | DeepSeek V4 Pro / Flash / Flash Vision Exp |
+  | ZCode | GLM-5.3、GLM-5.3 Flash |
+  | Grok | Grok 4.6 |
+  | Kimi Code | Kimi K3 |
+  | Antigravity | Gemini 3.7 Flash |
+  | CodeBuddy | HY4 Preview |
+  | Claude Code | Claude Sonnet 5、Claude Opus 5（内测中）|
+
+- 用紧凑列表展示总体 IQ，点击模型行展开各思考等级的 IQ、样本量和相对上次快照的变化。
+- 支持搜索模型或运行工具、按运行工具筛选，以及按 IQ、站点顺序或名称排序。筛选只影响查看范围，后台仍监听全部模型。
+- 显示已测题数和样本量，已测题目不足题库的 60% 时提示“样本覆盖不足”，与源站标准一致。
 - 默认每 15 分钟在后台更新，也可改为 5、30 或 60 分钟。
 - 支持手动刷新。
 - 支持 `自动`、`浅色`、`深色` 三种主题：默认自动模式在本地时间 07:00–18:59 使用浅色，其余时间使用深色；手动选择会保存在本机。
@@ -31,6 +39,10 @@ IQ               = round(weighted_score / weighted_samples × 150)
 
 当 `iq_weight` 缺失或无效时按 `1` 处理；当 `score_sum` 缺失时回退到 `p`。
 
+当前 DeepSWE 为每格最近三次有效结果的等权汇总。总体 IQ 由全部档位的样本一起计算，不是各档 IQ 的算术平均。已测题数是至少存在一条有效样本的任务数，跨档位按任务去重。
+
+同一基础模型通过不同运行工具测试时分别展示。例如 Codex 的 `deepseek-v4-pro` 与 DSH 的 `dsh-deepseek-v4-pro` 保留独立分数和通知。模型身份直接使用接口的 `combo.model`，运行工具取 `combo.agent`（缺省为 Codex）。展示名表只用于易读名称，不限制模型范围；尚未收录名称的新模型或工具会显示接口原名。
+
 ## 安装
 
 该项目不需要安装依赖，也不需要构建。
@@ -38,15 +50,11 @@ IQ               = round(weighted_score / weighted_samples × 150)
 1. 在 Chrome 打开 `chrome://extensions/`。
 2. 开启右上角的“开发者模式”。
 3. 点击“加载已解压的扩展程序”。
-4. 选择本目录：
-
-```text
-/Volumes/data/chatgpt-web/dev/codex-radar-monitor
-```
+4. 选择下载并解压后的扩展目录（包含 `manifest.json`）。
 
 5. 固定工具栏中的 **Codex Radar IQ Monitor** 图标。
 
-首次安装后扩展会立即获取一次数据。打开弹窗即可查看六个模型的总体分数和思考等级矩阵。
+首次安装后扩展会立即获取一次数据。打开弹窗即可搜索、筛选模型，并展开查看思考等级。列表可独立滚动，顶部搜索和底部监听设置始终可用。没有样本的档位显示“待采样”，不显示为零分。
 
 ## 权限说明
 
@@ -62,27 +70,27 @@ IQ               = round(weighted_score / weighted_samples × 150)
 ## 开发与验证
 
 ```bash
-cd /Volumes/data/chatgpt-web/dev/codex-radar-monitor
+cd codex-radar-iq-monitor
 npm run check
 npm run smoke
 ```
 
 - `npm run check`：Manifest、发布脚本、JavaScript 语法和单元测试检查。
-- `npm run smoke`：请求实时接口并在终端打印六个模型的 IQ 矩阵。
+- `npm run smoke`：请求实时接口，打印全部模型、运行工具及实际思考等级的 IQ 矩阵。
 
 ## 打包与发布
 
 本地可以按 Chrome 扩展版本号生成发布包：
 
 ```bash
-npm run package -- v0.2.0
+npm run package -- v0.6.0
 ```
 
 输出文件：
 
 ```text
-dist/codex-radar-iq-monitor-v0.2.0.zip
-dist/codex-radar-iq-monitor-v0.2.0.zip.sha256
+dist/codex-radar-iq-monitor-v0.6.0.zip
+dist/codex-radar-iq-monitor-v0.6.0.zip.sha256
 ```
 
 推送形如 `v0.3.0` 的 tag 后，`.github/workflows/release.yml` 会自动：
@@ -144,13 +152,16 @@ codex-radar-monitor/
 │   ├── popup.html
 │   ├── popup.js
 │   ├── radar.js
+│   ├── view.js
 │   └── theme.js
 └── test/
-    └── radar.test.mjs
+    ├── radar.test.mjs
+    └── view.test.mjs
 ```
 
 ## 当前边界
 
 - 依赖 Codex Radar 当前公开 API 及字段结构；站点若调整接口，需要同步更新 `src/radar.js`。
+- 当前汇总 DeepSWE 软件工程题库，不混合庞贝壁画等其他 benchmark 的结果。
 - Chrome 的后台 Alarm 不是精确定时器，浏览器可能根据休眠和资源策略延后执行。
 - 本版本只保留“当前快照、上一次快照和最近变化”，暂不绘制长期历史曲线。

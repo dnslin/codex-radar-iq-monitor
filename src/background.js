@@ -11,6 +11,14 @@ import {
 
 const NOTIFICATION_ID = "codex-radar-iq-change";
 let refreshPromise = null;
+let storeUpdatePromise = Promise.resolve();
+
+// Keep state writes, badges and notifications in order. Network requests run
+// outside this queue so MARK_SEEN and SAVE_SETTINGS remain available while fetching.
+function updateStore(operation) {
+  storeUpdatePromise = storeUpdatePromise.then(operation, operation);
+  return storeUpdatePromise;
+}
 
 function emptyState() {
   return {
@@ -86,52 +94,59 @@ async function showChangeNotification(changes) {
 }
 
 async function performRefresh() {
-  const { state: oldState, settings } = await readStore();
   const startedAt = new Date().toISOString();
 
-  await writeState({
-    ...oldState,
-    status: oldState.snapshot ? "refreshing" : "loading",
-    lastAttemptAt: startedAt,
-    error: null,
+  await updateStore(async () => {
+    const { state } = await readStore();
+    await writeState({
+      ...state,
+      status: state.snapshot ? "refreshing" : "loading",
+      lastAttemptAt: startedAt,
+      error: null,
+    });
   });
 
   try {
     const snapshot = await fetchRadarSnapshot();
-    const changes = compareSnapshots(
-      oldState.snapshot,
-      snapshot,
-      settings.notificationThreshold,
-    );
-    const changedModels = new Set(changes.map((change) => change.modelId));
-    const unreadCount = Math.min(
-      999,
-      (Number(oldState.unreadCount) || 0) + changedModels.size,
-    );
-    const nextState = {
-      status: "ready",
-      snapshot,
-      previousSnapshot: oldState.snapshot,
-      recentChanges: changes,
-      unreadCount,
-      lastAttemptAt: startedAt,
-      lastSuccessAt: snapshot.fetchedAt,
-      error: null,
-    };
+    return await updateStore(async () => {
+      const { state, settings } = await readStore();
+      const changes = compareSnapshots(
+        state.snapshot,
+        snapshot,
+        settings.notificationThreshold,
+      );
+      const changedModels = new Set(changes.map((change) => change.modelId));
+      const unreadCount = Math.min(
+        999,
+        (Number(state.unreadCount) || 0) + changedModels.size,
+      );
+      const nextState = {
+        status: "ready",
+        snapshot,
+        previousSnapshot: state.snapshot,
+        recentChanges: changes,
+        unreadCount,
+        lastAttemptAt: startedAt,
+        lastSuccessAt: snapshot.fetchedAt,
+        error: null,
+      };
 
-    await writeState(nextState);
-    if (settings.notificationsEnabled && changes.length) {
-      await showChangeNotification(changes);
-    }
-    return nextState;
+      await writeState(nextState);
+      if (settings.notificationsEnabled && changes.length) {
+        await showChangeNotification(changes);
+      }
+      return nextState;
+    });
   } catch (error) {
-    const nextState = {
-      ...oldState,
-      status: "error",
-      lastAttemptAt: startedAt,
-      error: error instanceof Error ? error.message : String(error),
-    };
-    await writeState(nextState);
+    await updateStore(async () => {
+      const { state } = await readStore();
+      await writeState({
+        ...state,
+        status: "error",
+        lastAttemptAt: startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     throw error;
   }
 }
@@ -146,12 +161,14 @@ function refreshRadar() {
 }
 
 async function initialize() {
-  const stored = await chrome.storage.local.get(SETTINGS_KEY);
-  const settings = normalizeSettings(stored[SETTINGS_KEY] ?? DEFAULT_SETTINGS);
-  await chrome.storage.local.set({ [SETTINGS_KEY]: settings });
-  await scheduleRefresh(settings);
-  const { state } = await readStore();
-  await updateBadge(state.unreadCount);
+  await updateStore(async () => {
+    const stored = await chrome.storage.local.get(SETTINGS_KEY);
+    const settings = normalizeSettings(stored[SETTINGS_KEY] ?? DEFAULT_SETTINGS);
+    await chrome.storage.local.set({ [SETTINGS_KEY]: settings });
+    await scheduleRefresh(settings);
+    const { state } = await readStore();
+    await updateBadge(state.unreadCount);
+  });
   await refreshRadar().catch((error) => {
     console.warn("Initial Codex Radar refresh failed", error);
   });
@@ -169,21 +186,25 @@ async function handleMessage(message) {
       return { ok: true, state, settings };
     }
     case "SAVE_SETTINGS": {
-      const settings = normalizeSettings(message.settings);
-      await chrome.storage.local.set({ [SETTINGS_KEY]: settings });
-      await scheduleRefresh(settings);
-      if (!settings.notificationsEnabled) {
-        await chrome.notifications.clear(NOTIFICATION_ID);
-      }
-      const { state } = await readStore();
-      return { ok: true, state, settings };
+      return updateStore(async () => {
+        const settings = normalizeSettings(message.settings);
+        await chrome.storage.local.set({ [SETTINGS_KEY]: settings });
+        await scheduleRefresh(settings);
+        if (!settings.notificationsEnabled) {
+          await chrome.notifications.clear(NOTIFICATION_ID);
+        }
+        const { state } = await readStore();
+        return { ok: true, state, settings };
+      });
     }
     case "MARK_SEEN": {
-      const { state, settings } = await readStore();
-      const nextState = { ...state, unreadCount: 0 };
-      await writeState(nextState);
-      await chrome.notifications.clear(NOTIFICATION_ID);
-      return { ok: true, state: nextState, settings };
+      return updateStore(async () => {
+        const { state, settings } = await readStore();
+        const nextState = { ...state, unreadCount: 0 };
+        await writeState(nextState);
+        await chrome.notifications.clear(NOTIFICATION_ID);
+        return { ok: true, state: nextState, settings };
+      });
     }
     default:
       throw new Error("Unknown extension message");

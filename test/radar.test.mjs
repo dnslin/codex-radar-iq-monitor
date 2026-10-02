@@ -49,7 +49,7 @@ function fixture() {
   };
 }
 
-test("buildSnapshot uses the same weighted IQ formula as Codex Radar", () => {
+test("buildSnapshot uses the site's equal sample IQ formula and ignores obsolete cell weights", () => {
   const snapshot = buildSnapshot(fixture(), "2026-08-10T02:00:00Z");
   const sol = snapshot.models.find((model) => model.id === "gpt-5.6-sol");
 
@@ -61,18 +61,18 @@ test("buildSnapshot uses the same weighted IQ formula as Codex Radar", () => {
   );
 
   const low = sol.efforts.find((effort) => effort.effort === "low");
-  assert.equal(low.weightedScore, 5);
-  assert.equal(low.weightedSamples, 8);
+  assert.equal(low.scoreSum, 3);
   assert.equal(low.rawSamples, 5);
-  assert.equal(low.iq, 94);
+  assert.equal(low.iq, 90);
   assert.equal(low.sampledTaskCount, 2);
   assert.equal(sol.efforts.find((effort) => effort.effort === "high").sampledTaskCount, 1);
 
-  assert.equal(sol.weightedScore, 6);
-  assert.equal(sol.weightedSamples, 9);
+  assert.equal(sol.scoreSum, 4);
   assert.equal(sol.rawSamples, 6);
   assert.equal(sol.iq, 100);
   assert.equal(sol.sampledTaskCount, 2, "the same task at two efforts counts once for coverage");
+  assert.equal(Object.hasOwn(sol, "weightedSamples"), false);
+  assert.equal(Object.hasOwn(low, "weightedScore"), false);
 });
 
 test("buildSnapshot discovers models from the API, including unfamiliar models", () => {
@@ -104,6 +104,16 @@ test("buildSnapshot includes the current site's added models and their runtime l
     ["hy4-preview", "codebuddy", "HY4 Preview", "CodeBuddy"],
     ["claude-sonnet-5", "claude-code", "Claude Sonnet 5", "Claude Code"],
     ["claude-opus-5", "claude-code", "Claude Opus 5", "Claude Code"],
+    ["gpt-6.1-sol", undefined, "GPT-6.1 Sol", "Codex"],
+    ["gpt-6-sol", undefined, "GPT-6 Sol", "Codex"],
+    ["gpt-6-luna", undefined, "GPT-6 Luna", "Codex"],
+    ["deepseek-v4.1-flash", undefined, "DeepSeek V4.1 Flash", "Codex"],
+    ["dsh-deepseek-v4.1-flash", "dsh-minimal", "DeepSeek V4.1 Flash", "DSH"],
+    ["grok-4.7", "grok-build", "Grok 4.7", "Grok"],
+    ["gemini-3.8-flash", "antigravity", "Gemini 3.8 Flash", "Antigravity"],
+    ["kimi-k2.8-preview", "kimi-code", "Kimi K2.8 Preview", "Kimi Code"],
+    ["claude-opus-5-5", "claude-code", "Claude Opus 5.5", "Claude Code"],
+    ["kiro-claude-opus-5.5", "kiro", "Claude Opus 5.5", "Kiro"],
   ];
   const input = fixture();
   input.combos = addedModels.map(([model, agent]) => ({ model, agent, effort: "high", manual_only: true }));
@@ -114,7 +124,23 @@ test("buildSnapshot includes the current site's added models and their runtime l
   const snapshot = buildSnapshot(input);
   assert.deepEqual(snapshot.models.map((model) => [model.id, model.label, model.runtimeLabel, model.iq]),
     addedModels.map(([id, _agent, label, runtime]) => [id, label, runtime, 75]));
-  assert.equal(snapshot.models.find((model) => model.id === "claude-opus-5").statusLabel, "内测中");
+  assert.ok(snapshot.models.every((model) => !Object.hasOwn(model, "statusLabel")));
+});
+
+test("Claude Code and Kiro keep independent scores for Claude Opus 5.5", () => {
+  const input = fixture();
+  input.combos = [
+    { model: "claude-opus-5-5", agent: "claude-code", effort: "high" },
+    { model: "kiro-claude-opus-5.5", agent: "kiro", effort: "high" },
+  ];
+  input.cells = {
+    "task-a|claude-opus-5-5|high": { n: 3, score_sum: 1 },
+    "task-a|kiro-claude-opus-5.5|high": { n: 3, score_sum: 2 },
+  };
+  assert.deepEqual(buildSnapshot(input).models.map((model) => [model.label, model.runtimeLabel, model.iq]), [
+    ["Claude Opus 5.5", "Claude Code", 50],
+    ["Claude Opus 5.5", "Kiro", 100],
+  ]);
 });
 
 test("Codex and DSH keep separate scores for the same underlying DeepSeek model", () => {
@@ -152,21 +178,20 @@ test("empty API catalog does not invent monitored models", () => {
   assert.equal(snapshot.comboCount, 0);
 });
 
-test("buildSnapshot falls back to p and ignores invalid non-positive weights", () => {
+test("buildSnapshot falls back to p when score_sum is invalid", () => {
   const input = fixture();
   input.cells["task-a|gpt-5.6-sol|low"] = {
     n: 2,
     p: 1,
     score_sum: "not-a-number",
-    iq_weight: 0,
   };
   delete input.cells["task-b|gpt-5.6-sol|low"];
 
   const snapshot = buildSnapshot(input);
   const low = snapshot.models[0].efforts.find((effort) => effort.effort === "low");
 
-  assert.equal(low.weightedScore, 1);
-  assert.equal(low.weightedSamples, 2);
+  assert.equal(low.scoreSum, 1);
+  assert.equal(low.rawSamples, 2);
   assert.equal(low.iq, 75);
 });
 

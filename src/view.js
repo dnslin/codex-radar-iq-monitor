@@ -14,7 +14,7 @@ export function hasLowCoverage(sampledTaskCount, taskCount) {
 const PROVIDERS = [
   { info: { id: "openai", label: "ChatGPT", company: "OpenAI", aliases: ["GPT"] }, pattern: /^gpt(?:-|$)/ },
   { info: { id: "deepseek", label: "DeepSeek", company: "深度求索", aliases: [] }, pattern: /^(?:dsh-)?deepseek(?:-|$)/ },
-  { info: { id: "anthropic", label: "Claude", company: "Anthropic", aliases: ["克劳德"] }, pattern: /^claude(?:-|$)/ },
+  { info: { id: "anthropic", label: "Claude", company: "Anthropic", aliases: ["克劳德"] }, pattern: /^(?:kiro-)?claude(?:-|$)/ },
   { info: { id: "google", label: "Gemini", company: "Google", aliases: ["谷歌"] }, pattern: /^gemini(?:-|$)/ },
   { info: { id: "xai", label: "Grok", company: "xAI", aliases: ["x.ai"] }, pattern: /^grok(?:-|$)/ },
   { info: { id: "moonshot", label: "Kimi", company: "月之暗面", aliases: ["Moonshot"] }, pattern: /^(?:kimi|k3)(?:-|$)/ },

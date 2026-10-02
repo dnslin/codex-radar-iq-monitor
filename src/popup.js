@@ -148,13 +148,8 @@ function formatRelativeTime(value) {
 }
 
 function formatSample(value) {
-  const weighted = Number(value?.weightedSamples) || 0;
   const raw = Number(value?.rawSamples) || 0;
-  if (!weighted) return "待采样";
-  if (Math.abs(weighted - raw) > 0.001) {
-    return `加权 ${numberFormatter.format(weighted)}`;
-  }
-  return `${numberFormatter.format(raw)} 次`;
+  return raw ? `${numberFormatter.format(raw)} 次` : "待采样";
 }
 
 function renderDelta(element, delta) {
@@ -233,13 +228,11 @@ function createModelRow(model) {
   const identity = element("span", "model-identity");
   const nameLine = element("span", "model-name-line");
   const name = element("span", "model-name");
-  const status = element("span", "model-status");
-  nameLine.append(name, status);
+  nameLine.append(name);
   const metadata = element("span", "model-meta");
   const runtime = element("span", "runtime-badge");
   const effortCount = element("span", "effort-count");
-  const coverageNote = element("span", "coverage-note", "样本覆盖不足");
-  coverageNote.title = "已测题目不足全部题目的 60%，IQ 仅供参考";
+  const coverageNote = createCoverageNote();
   metadata.append(runtime, effortCount, coverageNote);
   identity.append(nameLine, metadata);
   const score = element("strong", "model-score");
@@ -265,7 +258,13 @@ function createModelRow(model) {
   const noEfforts = element("p", "no-efforts", "源站尚未提供思考等级数据");
   content.append(table, noEfforts);
   row.append(summary, content);
-  return { row, summary, name, status, runtime, effortCount, coverageNote, score, sample, delta, table, caption, body, noEfforts };
+  return { row, summary, name, runtime, effortCount, coverageNote, score, sample, delta, table, caption, body, noEfforts };
+}
+
+function createCoverageNote() {
+  const note = element("span", "coverage-note", "样本覆盖不足");
+  note.title = "已测题目不足全部题目的 60%，IQ 仅供参考";
+  return note;
 }
 
 function renderSample(container, sample) {
@@ -273,7 +272,7 @@ function renderSample(container, sample) {
   const coverage = element("span", "coverage-count", `${sample.sampledTaskCount} / ${currentState.snapshot.taskCount} 题`);
   coverage.hidden = !isNumber(sample.sampledTaskCount);
   container.replaceChildren(count, coverage);
-  container.title = `原始 ${numberFormatter.format(sample.rawSamples)} 次 · 加权 ${numberFormatter.format(sample.weightedSamples)} · 已测 ${sample.sampledTaskCount} / ${currentState.snapshot.taskCount} 题`;
+  container.title = `${numberFormatter.format(sample.rawSamples)} 次 · 已测 ${sample.sampledTaskCount} / ${currentState.snapshot.taskCount} 题`;
 }
 
 function updateModelRow(view, model, previous) {
@@ -281,8 +280,6 @@ function updateModelRow(view, model, previous) {
   view.previous = previous;
   view.name.textContent = model.label;
   view.name.title = model.modelId;
-  view.status.textContent = model.statusLabel;
-  view.status.hidden = !model.statusLabel;
   view.runtime.textContent = model.runtimeLabel;
   view.effortCount.textContent = `${model.efforts.length} 个等级`;
   view.coverageNote.hidden = !hasLowCoverage(model.sampledTaskCount, currentState.snapshot.taskCount);
@@ -290,8 +287,8 @@ function updateModelRow(view, model, previous) {
   view.score.classList.toggle("missing", !isNumber(model.iq));
   renderSample(view.sample, model);
   renderDelta(view.delta, valueDelta(previous?.iq, model.iq));
-  view.summary.setAttribute("aria-label", `${model.label}，${model.runtimeLabel}${model.statusLabel ? `，${model.statusLabel}` : ""}，总体 ${view.score.textContent} IQ，${view.sample.textContent}，较上次${view.delta.textContent}。展开查看思考等级`);
-  view.caption.textContent = `${model.label}（${model.runtimeLabel}）的思考等级 IQ`;
+  view.summary.setAttribute("aria-label", `${model.label}，${model.runtimeLabel}，DeepSWE 总体 ${view.score.textContent} IQ，${view.sample.textContent}${view.coverageNote.hidden ? "" : "，样本覆盖不足"}，较上次${view.delta.textContent}。展开查看思考等级`);
+  view.caption.textContent = `${model.label}（${model.runtimeLabel}）的 DeepSWE 思考等级 IQ`;
   view.table.hidden = model.efforts.length === 0;
   view.noEfforts.hidden = model.efforts.length > 0;
 
@@ -303,6 +300,9 @@ function updateModelRow(view, model, previous) {
     const score = element("td", isNumber(effort.iq) ? "effort-score" : "missing", isNumber(effort.iq) ? numberFormatter.format(effort.iq) : "—");
     const sample = element("td", "sample");
     renderSample(sample, effort);
+    if (hasLowCoverage(effort.sampledTaskCount, currentState.snapshot.taskCount)) {
+      sample.append(createCoverageNote());
+    }
     const delta = element("td", "delta");
     renderDelta(delta, valueDelta(previousEfforts.get(effort.effort)?.iq, effort.iq));
     row.append(name, score, sample, delta);
@@ -499,7 +499,7 @@ function renderMetadata(snapshot) {
     return;
   }
 
-  datasetMeta.textContent = `${providerGroups(snapshot.models).length} 厂商 · ${snapshot.models.length} 模型 · ${snapshot.taskCount} 任务`;
+  datasetMeta.textContent = `DeepSWE · ${providerGroups(snapshot.models).length} 厂商 · ${snapshot.models.length} 模型 · ${snapshot.taskCount} 任务`;
   const source = snapshot.sourceUpdatedAt
     ? `站点快照 ${formatDateTime(snapshot.sourceUpdatedAt)}`
     : "站点快照时间未知";

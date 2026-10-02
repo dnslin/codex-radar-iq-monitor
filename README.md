@@ -1,33 +1,37 @@
 # Codex Radar IQ Monitor
 
-一个无需持续打开 Codex Radar 页面、可以在 Chrome 后台定时汇总模型 IQ 的 Manifest V3 扩展。
+一个无需持续打开 Codex Radar 页面、可以在 Chrome 后台定时汇总 DeepSWE 软件工程 IQ 的 Manifest V3 扩展。
+
+当前版本：0.8.1。更新内容见 [更新记录](CHANGELOG.md)。
 
 ## 功能
 
 - 自动读取 DeepSWE 接口中的所有模型与思考等级，源站新增模型后随刷新同步，无需修改固定名单。
-- 截至 2026-09-06，支持 18 条运行工具与模型记录、64 个思考档位：
+- 截至 2026-10-02，接口提供 25 条运行工具与模型记录、91 个思考档位，题库包含 112 道题：
 
   | 运行工具 | 模型 |
   |---|---|
-  | Codex | GPT-6 Astra、GPT-5.6 Sol / Terra / Luna、GPT-5.5、DeepSeek V4 Pro / Flash |
-  | DSH | DeepSeek V4 Pro / Flash / Flash Vision Exp |
+  | Codex | GPT-6 Astra / Sol / Luna、GPT-5.6 Sol / Terra / Luna、GPT-5.5、DeepSeek V4 Flash / V4.1 Flash |
+  | DSH | DeepSeek V4 Flash / Flash Vision Exp / V4.1 Flash |
   | ZCode | GLM-5.3、GLM-5.3 Flash |
-  | Grok | Grok 4.6 |
-  | Kimi Code | Kimi K3 |
-  | Antigravity | Gemini 3.7 Flash |
+  | Grok | Grok 4.6 / 4.7 |
+  | Kimi Code | Kimi K3、Kimi K2.8 Preview |
+  | Antigravity | Gemini 3.7 Flash / 3.8 Flash |
   | CodeBuddy | HY4 Preview |
-  | Claude Code | Claude Sonnet 5、Claude Opus 5（内测中）|
+  | Claude Code | Claude Sonnet 5、Claude Opus 5 / 5.5 |
+  | Kiro | Claude Opus 5.5（待采样）|
 
 - 按模型厂商分组：ChatGPT / OpenAI、DeepSeek、Claude / Anthropic、Gemini / Google、Grok / xAI、Kimi / 月之暗面、GLM / 智谱、混元 / 腾讯。左侧分类可快速切换，选择“全部厂商”时，右侧列表仍按厂商分段展示。
 - 分类导航和分组标题配有品牌图标，使用石墨灰深色主题、雾白浅色主题和蓝色选中状态。图标随扩展本地打包，无需联网加载；来源与许可见 [图标说明](icons/providers/README.md)。
-- 同厂商使用不同运行工具的模型归入同一组，各自保留 IQ 和工具标记。例如 Codex 与 DSH 测得的 DeepSeek 分数不会合并计算。无法识别厂商的新模型显示在“其他”组，仍可正常查看。
+- 同厂商使用不同运行工具的模型归入同一组，各自保留 IQ 和工具标记。例如 Codex 与 DSH 测得的 DeepSeek 分数不会合并计算；Kiro 的 Claude 归入 Claude / Anthropic，与 Claude Code 分别展示。无法识别厂商的新模型显示在“其他”组，仍可正常查看。
 - 用紧凑列表展示总体 IQ，点击模型行展开各思考等级的 IQ、样本量和相对上次快照的变化。
 - 支持搜索模型、厂商或运行工具，识别 OpenAI、Anthropic、深度求索等名称。可结合厂商和运行工具筛选，按 IQ、站点顺序或名称在厂商组内排序。筛选只影响查看范围，后台仍监听全部模型。
-- 显示已测题数和样本量，已测题目不足题库的 60% 时提示“样本覆盖不足”，与源站标准一致。
+- 显示已测题数和样本量。总体及各思考等级分别计算覆盖率，已测题目不足题库的 60% 时提示“样本覆盖不足”；总体样本充足也不会隐藏稀疏档位的提醒。
 - 默认每 15 分钟在后台更新，也可改为 5、30 或 60 分钟。
 - 支持手动刷新。
 - 支持 `自动`、`浅色`、`深色` 三种主题：默认自动模式在本地时间 07:00–18:59 使用浅色，其余时间使用深色；手动选择会保存在本机。
 - 当 IQ 变化达到设定阈值时发送 Chrome 通知，并在扩展徽章显示未读变化模型数。
+- 刷新途中标记已读不会恢复旧的未读数。关闭通知或修改阈值后，进行中的刷新使用最新设置。
 - 页面未打开时仍会通过 Chrome Alarm 定期更新。
 
 ## 数据口径
@@ -35,16 +39,18 @@
 扩展直接读取 Codex Radar 的公开表格接口，不抓取页面 DOM。IQ 计算与站点当前前端实现保持一致：
 
 ```text
-weighted_score   = Σ(score_sum × iq_weight)
-weighted_samples = Σ(n × iq_weight)
-IQ               = round(weighted_score / weighted_samples × 150)
+score_sum = Σ(各单元格的 score_sum)
+samples   = Σ(各单元格的 n)
+IQ        = round(clamp(score_sum / samples, 0, 1) × 150)
 ```
 
-当 `iq_weight` 缺失或无效时按 `1` 处理；当 `score_sum` 缺失时回退到 `p`。
+按有效样本等权汇总，不使用额外权重。当 `score_sum` 缺失时使用接口的 `p`；没有有效样本时显示“待采样”。
 
 当前 DeepSWE 为每格最近三次有效结果的等权汇总。总体 IQ 由全部档位的样本一起计算，不是各档 IQ 的算术平均。已测题数是至少存在一条有效样本的任务数，跨档位按任务去重。
 
-同一基础模型通过不同运行工具测试时分别展示。例如 Codex 的 `deepseek-v4-pro` 与 DSH 的 `dsh-deepseek-v4-pro` 保留独立分数和通知。模型身份直接使用接口的 `combo.model`，运行工具取 `combo.agent`（缺省为 Codex）。展示名表只用于易读名称，不限制模型范围；尚未收录名称的新模型或工具会显示接口原名。
+这里的 IQ 是 DeepSWE 软件工程成绩。原站首页的“综合智能”还合并了视觉题成绩，两者数值不能直接比较。
+
+同一基础模型通过不同运行工具测试时分别展示。例如 Codex 的 `deepseek-v4.1-flash` 与 DSH 的 `dsh-deepseek-v4.1-flash` 保留独立分数和通知。模型身份直接使用接口的 `combo.model`，运行工具取 `combo.agent`（缺省为 Codex）。展示名表只用于易读名称，不限制模型范围；尚未收录名称的新模型或工具会显示接口原名。
 
 ## 安装
 
@@ -82,7 +88,7 @@ npm run check
 npm run smoke
 ```
 
-- `npm run check`：Manifest、发布脚本、JavaScript 语法和单元测试检查。
+- `npm run check`：Manifest、发布脚本、JavaScript 语法和单元测试检查。后台回归测试覆盖刷新中的已读操作、通知开关、阈值更新和并发存储。
 - `npm run smoke`：请求实时接口，打印全部模型、运行工具及实际思考等级的 IQ 矩阵。
 - `node scripts/verify-popup.mjs`：在独立 Chrome 窗口验证真实工具栏弹窗的自然尺寸、模型数量、搜索和展开交互；前置条件及发布包验收方法见 [弹窗验证说明](docs/popup-verification.md)。
 
@@ -91,14 +97,14 @@ npm run smoke
 本地可以按 Chrome 扩展版本号生成发布包：
 
 ```bash
-npm run package -- v0.8.0
+npm run package -- v0.8.1
 ```
 
 输出文件：
 
 ```text
-dist/codex-radar-iq-monitor-v0.8.0.zip
-dist/codex-radar-iq-monitor-v0.8.0.zip.sha256
+dist/codex-radar-iq-monitor-v0.8.1.zip
+dist/codex-radar-iq-monitor-v0.8.1.zip.sha256
 ```
 
 推送形如 `v0.3.0` 的 tag 后，`.github/workflows/release.yml` 会自动：
@@ -153,6 +159,7 @@ codex-radar-monitor/
 │   ├── package.mjs
 │   ├── publish-chrome-web-store.mjs
 │   ├── smoke.mjs
+│   ├── verify-popup.mjs
 │   └── validate.mjs
 ├── src/
 │   ├── background.js
@@ -163,6 +170,7 @@ codex-radar-monitor/
 │   ├── view.js
 │   └── theme.js
 └── test/
+    ├── background.test.mjs
     ├── radar.test.mjs
     └── view.test.mjs
 ```

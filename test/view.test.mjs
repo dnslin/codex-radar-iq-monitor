@@ -38,23 +38,24 @@ test("runtime filter combines with search and returns an empty result when neith
 
 test("provider groups cover the current catalog in a stable order without changing scores or records", () => {
   const catalog = [
-    "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
-    "deepseek-v4-flash", "deepseek-v4-pro", "dsh-deepseek-v4-flash", "dsh-deepseek-v4-pro",
-    "grok-4.6", "k3", "glm-5.3", "glm-5.3-flash", "dsh-deepseek-v4-flash-vision-exp",
-    "gemini-3.7-flash", "hy4-preview", "claude-sonnet-5", "claude-opus-5",
+    "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+    "deepseek-v4-flash", "deepseek-v4.1-flash", "dsh-deepseek-v4-flash", "dsh-deepseek-v4.1-flash",
+    "grok-4.6", "grok-4.7", "k3", "kimi-k2.8-preview", "glm-5.3", "glm-5.3-flash", "dsh-deepseek-v4-flash-vision-exp",
+    "gemini-3.7-flash", "gemini-3.8-flash", "hy4-preview", "claude-sonnet-5", "claude-opus-5",
+    "claude-opus-5-5", "kiro-claude-opus-5.5",
   ].map((modelId, index) => ({ id: modelId, modelId, iq: 70 + index }));
   const original = structuredClone(catalog);
   const groups = providerGroups(selectModels(catalog));
   assert.deepEqual(groups.map(({ id, models: entries }) => [id, entries.length]), [
-    ["openai", 5], ["deepseek", 5], ["anthropic", 2], ["google", 1],
-    ["xai", 1], ["moonshot", 1], ["zhipu", 2], ["tencent", 1],
+    ["openai", 7], ["deepseek", 5], ["anthropic", 4], ["google", 2],
+    ["xai", 2], ["moonshot", 2], ["zhipu", 2], ["tencent", 1],
   ]);
   for (const group of groups) {
     assert.deepEqual(group.models.map(({ iq }) => iq), group.models.map(({ iq }) => iq).sort((a, b) => b - a));
     for (const model of group.models) assert.equal(model, catalog.find(({ id }) => id === model.id));
   }
   assert.deepEqual(catalog, original);
-  assert.equal(groups.reduce((count, group) => count + group.models.length, 0), 18);
+  assert.equal(groups.reduce((count, group) => count + group.models.length, 0), 25);
   assert.deepEqual(providerGroups([]), []);
 });
 
@@ -63,9 +64,20 @@ test("provider classification follows model identity across runtimes", () => {
   assert.equal(modelProvider({ modelId: "dsh-deepseek-v4-pro", runtime: "dsh-minimal" }).id, "deepseek");
   assert.equal(modelProvider({ modelId: "gpt-6-astra", runtime: "new-tool" }).id, "openai");
   assert.equal(modelProvider({ modelId: "CLAUDE-SONNET-5", runtime: "codex" }).id, "anthropic");
+  assert.equal(modelProvider({ modelId: "kiro-claude-opus-5.5", runtime: "kiro" }).id, "anthropic");
   assert.deepEqual(selectModels(models(), { provider: "deepseek" }).map(({ id }) => id), [
     "dsh:deepseek", "codex:deepseek",
   ]);
+});
+
+test("Claude provider search and runtime filtering retain Kiro and Claude Code as separate records", () => {
+  const entries = [
+    { id: "claude-opus-5-5", modelId: "claude-opus-5-5", label: "Claude Opus 5.5", runtime: "claude-code", runtimeLabel: "Claude Code", iq: 100 },
+    { id: "kiro-claude-opus-5.5", modelId: "kiro-claude-opus-5.5", label: "Claude Opus 5.5", runtime: "kiro", runtimeLabel: "Kiro", iq: null },
+  ];
+  assert.deepEqual(selectModels(entries, { provider: "anthropic", query: "Anthropic" }), entries);
+  assert.deepEqual(selectModels(entries, { provider: "anthropic", runtime: "kiro", query: "Claude" }), [entries[1]]);
+  assert.deepEqual(providerGroups(entries).map(({ id, models }) => [id, models.length]), [["anthropic", 2]]);
 });
 
 test("unknown models stay visible under Other and are not assigned by runtime or partial name matches", () => {

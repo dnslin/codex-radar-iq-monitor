@@ -11,23 +11,33 @@ export const EFFORT_ORDER = ["off", "none", "minimal", "low", "medium", "high", 
 // as a readable label until the site gives them a familiar display name.
 const MODEL_LABELS = new Map(Object.entries({
   "gpt-6-astra": "GPT-6 Astra",
+  "gpt-6.1-sol": "GPT-6.1 Sol",
+  "gpt-6-sol": "GPT-6 Sol",
+  "gpt-6-luna": "GPT-6 Luna",
   "gpt-5.6-sol": "GPT-5.6 Sol",
   "gpt-5.6-terra": "GPT-5.6 Terra",
   "gpt-5.6-luna": "GPT-5.6 Luna",
   "gpt-5.5": "GPT-5.5",
   "deepseek-v4-pro": "DeepSeek V4 Pro",
   "deepseek-v4-flash": "DeepSeek V4 Flash",
+  "deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
   "dsh-deepseek-v4-pro": "DeepSeek V4 Pro",
   "dsh-deepseek-v4-flash": "DeepSeek V4 Flash",
+  "dsh-deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
   "dsh-deepseek-v4-flash-vision-exp": "DeepSeek V4 Flash Vision Exp",
   "grok-4.6": "Grok 4.6",
+  "grok-4.7": "Grok 4.7",
   "k3": "Kimi K3",
+  "kimi-k2.8-preview": "Kimi K2.8 Preview",
   "glm-5.3": "GLM-5.3",
   "glm-5.3-flash": "GLM-5.3 Flash",
   "gemini-3.7-flash": "Gemini 3.7 Flash",
+  "gemini-3.8-flash": "Gemini 3.8 Flash",
   "hy4-preview": "HY4 Preview",
   "claude-sonnet-5": "Claude Sonnet 5",
   "claude-opus-5": "Claude Opus 5",
+  "claude-opus-5-5": "Claude Opus 5.5",
+  "kiro-claude-opus-5.5": "Claude Opus 5.5",
 }));
 
 const RUNTIME_LABELS = new Map(Object.entries({
@@ -39,6 +49,7 @@ const RUNTIME_LABELS = new Map(Object.entries({
   "antigravity": "Antigravity",
   "codebuddy": "CodeBuddy",
   "claude-code": "Claude Code",
+  "kiro": "Kiro",
 }));
 
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -61,36 +72,31 @@ function clamp(value, min, max) {
 function sampleFromCell(cell) {
   const sampleCount = Math.max(0, finiteNumber(cell?.n));
   if (!sampleCount) {
-    return { weightedScore: 0, weightedSamples: 0, rawSamples: 0 };
+    return emptySample();
   }
 
   const scoreSum = cell?.score_sum != null && Number.isFinite(Number(cell.score_sum))
     ? Number(cell.score_sum)
     : finiteNumber(cell?.p);
-  const rawWeight = finiteNumber(cell?.iq_weight, 1);
-  const weight = rawWeight > 0 ? rawWeight : 1;
-
   return {
-    weightedScore: scoreSum * weight,
-    weightedSamples: sampleCount * weight,
+    scoreSum,
     rawSamples: sampleCount,
   };
 }
 
 function emptySample() {
-  return { weightedScore: 0, weightedSamples: 0, rawSamples: 0 };
+  return { scoreSum: 0, rawSamples: 0 };
 }
 
 function addSample(target, source) {
-  target.weightedScore += source.weightedScore;
-  target.weightedSamples += source.weightedSamples;
+  target.scoreSum += source.scoreSum;
   target.rawSamples += source.rawSamples;
   return target;
 }
 
 function iqFromSample(sample) {
-  if (!sample.weightedSamples) return null;
-  const ratio = clamp(sample.weightedScore / sample.weightedSamples, 0, 1);
+  if (!sample.rawSamples) return null;
+  const ratio = clamp(sample.scoreSum / sample.rawSamples, 0, 1);
   return Math.round(ratio * 150);
 }
 
@@ -105,7 +111,7 @@ function sortEfforts(efforts) {
 /**
  * Converts the Codex Radar table response into the compact data used by the
  * extension. The IQ formula intentionally mirrors the website:
- * round(sum(score_sum * iq_weight) / sum(n * iq_weight) * 150).
+ * round(sum(score_sum) / sum(n) * 150).
  */
 export function buildSnapshot(table, fetchedAt = new Date().toISOString()) {
   if (!table || typeof table !== "object") {
@@ -136,7 +142,6 @@ export function buildSnapshot(table, fetchedAt = new Date().toISOString()) {
         label: MODEL_LABELS.get(model) ?? model,
         runtime,
         runtimeLabel: RUNTIME_LABELS.get(runtime) ?? runtime,
-        statusLabel: model === "claude-sonnet-5" || model === "claude-opus-5" ? "内测中" : "",
         efforts: new Set(),
       });
     }
@@ -168,8 +173,7 @@ export function buildSnapshot(table, fetchedAt = new Date().toISOString()) {
         return {
           effort,
           iq: iqFromSample(effortSample),
-          weightedScore: effortSample.weightedScore,
-          weightedSamples: effortSample.weightedSamples,
+          scoreSum: effortSample.scoreSum,
           rawSamples: effortSample.rawSamples,
           sampledTaskCount,
         };
@@ -182,10 +186,8 @@ export function buildSnapshot(table, fetchedAt = new Date().toISOString()) {
       modelId: model.modelId,
       runtime: model.runtime,
       runtimeLabel: model.runtimeLabel,
-      statusLabel: model.statusLabel,
       iq: iqFromSample(modelSample),
-      weightedScore: modelSample.weightedScore,
-      weightedSamples: modelSample.weightedSamples,
+      scoreSum: modelSample.scoreSum,
       rawSamples: modelSample.rawSamples,
       sampledTaskCount: sampledTasks.size,
       efforts,

@@ -4,6 +4,7 @@ import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { buildSnapshot, STATE_KEY } from "../src/radar.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const extensionPath = await realpath(resolve(process.argv[2] || root));
@@ -27,10 +28,10 @@ function inPopup(callback, argument) {
   return evaluate(`(${callback})(chrome.extension.getViews({ type: "popup" })[0], ${JSON.stringify(argument ?? null)})`);
 }
 
-async function waitFor(callback, description) {
+async function waitFor(callback, description, argument) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    const result = inPopup(callback);
+    const result = inPopup(callback, argument);
     if (result) return result;
     await delay(250);
   }
@@ -149,7 +150,7 @@ function appearanceState(view) {
     ".brand h1", "#status-text", ".section-heading h2", ".section-heading p", "#dataset-meta",
     "#provider-nav .provider-label", "#provider-nav .provider-count", ".sidebar-heading", ".list-heading > span",
     ".provider-group-name", ".provider-company", ".provider-group-count", ".model-name", ".runtime-badge",
-    ".effort-count", ".coverage-note", ".model-status", ".model-score", ".sample-count", ".coverage-count", ".delta",
+    ".effort-count", ".coverage-note", ".model-score", ".sample-count", ".coverage-count", ".delta",
     ".effort-table th", ".effort-score", ".settings-panel > summary", "#source-time", "footer a",
     "#theme-label", "#refresh-button > span:last-child", "#runtime-filter", "#model-sort",
   ];
@@ -299,6 +300,62 @@ function setTheme(mode) {
   }, mode), mode, "theme control must apply the requested appearance");
 }
 
+async function assertEffortCoverage(target) {
+  const response = evaluate('chrome.runtime.sendMessage({ type: "GET_STATE" })');
+  assert.equal(response.ok, true);
+  const tasks = Array.from({ length: 5 }, (_, index) => ({ id: `coverage-${index}` }));
+  const model = "kimi-k2.8-preview";
+  const snapshot = buildSnapshot({
+    benchmark_id: "deep-swe",
+    tasks,
+    combos: ["low", "high", "max"].map((effort) => ({ model, agent: "kimi-code", effort })),
+    cells: {
+      ...Object.fromEntries(tasks.slice(0, 3).map(({ id }) => [`${id}|${model}|low`, { n: 1, score_sum: 1 }])),
+      [`${tasks[0].id}|${model}|high`]: { n: 1, score_sum: 1 },
+    },
+  });
+  try {
+    evaluate(`chrome.storage.local.set(${JSON.stringify({ [STATE_KEY]: {
+      ...response.state, snapshot, previousSnapshot: null,
+    } })}).then(() => true)`);
+    await waitFor((view) => view.document.querySelectorAll(".model-row").length === 1 &&
+      view.document.querySelectorAll(".effort-table tbody tr").length === 3, "coverage fixture");
+    const coverage = inPopup((view) => {
+      const doc = view.document;
+      const row = doc.querySelector(".model-row");
+      row.querySelector("summary").click();
+      return {
+        overallWarning: !row.querySelector(".model-meta .coverage-note").hidden,
+        efforts: [...row.querySelectorAll("tbody tr")].map((effort) => ({
+          effort: effort.querySelector("th").textContent,
+          iq: effort.children[1].textContent,
+          warning: effort.querySelector(".coverage-note")?.textContent ?? null,
+          samples: effort.querySelector(".sample-count").textContent,
+        })),
+        metric: doc.querySelector(".section-heading p").textContent,
+        ariaLabel: row.querySelector("summary").getAttribute("aria-label"),
+        obsoleteStatus: Boolean(doc.querySelector(".model-status")),
+      };
+    });
+    assert.equal(coverage.overallWarning, false, "60% overall task coverage is sufficient");
+    assert.deepEqual(coverage.efforts, [
+      { effort: "low", iq: "150", warning: null, samples: "3 次" },
+      { effort: "high", iq: "150", warning: "样本覆盖不足", samples: "1 次" },
+      { effort: "max", iq: "—", warning: "样本覆盖不足", samples: "待采样" },
+    ], "coverage warnings must be computed for each effort, including an unsampled effort");
+    assert.match(coverage.metric, /DeepSWE.*软件工程/);
+    assert.match(coverage.ariaLabel, /DeepSWE/);
+    assert.equal(coverage.obsoleteStatus, false);
+    await assertAppearance(target, "light");
+    if (screenshotPath) await capturePopup(target, screenshotVariant("coverage-light"));
+  } finally {
+    evaluate(`chrome.storage.local.set(${JSON.stringify({ [STATE_KEY]: response.state })}).then(() => true)`);
+    await waitFor((view, count) => view.document.querySelectorAll(".model-row").length === count,
+      "restored live snapshot", response.state.snapshot.models.length);
+  }
+  console.log("Passed: sufficient overall coverage with a sparse 150 IQ effort, unsampled effort, and explicit DeepSWE labels.");
+}
+
 try {
   browser(["--headed", "--extension", extensionPath, "open", "chrome://extensions/"]);
   const extensionId = evaluate(`(() => {
@@ -334,6 +391,7 @@ try {
   }
 
   await waitFor((view) => view.document.querySelectorAll(".model-row").length > 0, "live model data");
+  await assertEffortCoverage(popup);
   let models = sourceModels();
   const initial = inPopup(measure);
   assertLayout(initial);
@@ -416,7 +474,7 @@ try {
   assert.equal(clearedQuery, "", "clear action must remove the search query");
   assertVisibleModels(models, "");
   assertLayout(inPopup(measure));
-  console.log(`Passed: natural 720×600 toolbar popup, ${models.length} source models, local accessible brand icons, theme contrast/focus, provider groups/navigation, refresh retention, provider aliases, group sorting, empty-result reset, expand, and no horizontal overflow.`);
+  console.log(`Passed: natural 720×600 toolbar popup, ${models.length} source models, per-effort coverage/DeepSWE labels, local accessible brand icons, theme contrast/focus, provider groups/navigation, refresh retention, provider aliases, group sorting, empty-result reset, expand, and no horizontal overflow.`);
 } finally {
   browser(["close"]);
 }

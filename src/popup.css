@@ -297,7 +297,6 @@ main {
 .model-identity { display: flex; flex-direction: column; min-width: 0; gap: 4px; }
 .model-name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .model-name { font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
-.model-status { padding: 0 5px; border-radius: 3px; font-size: 9px; line-height: 17px; color: var(--warning); background: var(--warning-bg); white-space: nowrap; }
 .model-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
 .runtime-badge { color: var(--summary-text); }
 .runtime-badge::before { content: ""; display: inline-block; width: 5px; height: 5px; margin-right: 5px; border-radius: 50%; background: var(--muted); vertical-align: 1px; }
@@ -322,6 +321,7 @@ main {
 .effort-table th:nth-child(3), .effort-table td:nth-child(3) { width: 30%; }
 .effort-table thead th { color: var(--muted); font-size: 10px; font-weight: 400; padding-top: 7px; padding-bottom: 7px; }
 .effort-table tbody th { font-weight: 500; }
+.effort-table .coverage-note { display: block; margin-top: 2px; white-space: normal; }
 .effort-score { font-weight: 650; font-variant-numeric: tabular-nums; }
 .no-efforts { margin: 0; padding: 12px 4px; color: var(--muted); font-size: 11px; }
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 180px; height: 100%; padding: 24px; text-align: center; }

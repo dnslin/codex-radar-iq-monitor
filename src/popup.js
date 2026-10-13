@@ -1,6 +1,7 @@
 import {
   SETTINGS_KEY,
   STATE_KEY,
+  canCompareSnapshots,
   normalizeSettings,
 } from "./radar.js";
 import {
@@ -148,8 +149,8 @@ function formatRelativeTime(value) {
 }
 
 function formatSample(value) {
-  const raw = Number(value?.rawSamples) || 0;
-  return raw ? `${numberFormatter.format(raw)} 次` : "待采样";
+  if (!isNumber(value?.rawSamples)) return "样本数未知";
+  return value.rawSamples ? `${numberFormatter.format(value.rawSamples)} 次` : "待采样";
 }
 
 function renderDelta(element, delta) {
@@ -165,7 +166,7 @@ function renderDelta(element, delta) {
   } else {
     element.classList.add(delta > 0 ? "positive" : "negative");
     element.textContent = `${delta > 0 ? "+" : ""}${numberFormatter.format(delta)}`;
-    element.title = `较上次${delta > 0 ? "上升" : "下降"} ${numberFormatter.format(Math.abs(delta))} IQ`;
+    element.title = `较上次${delta > 0 ? "上升" : "下降"} ${numberFormatter.format(Math.abs(delta))} 雷达分`;
   }
 }
 
@@ -247,7 +248,7 @@ function createModelRow(model) {
   const caption = element("caption", "sr-only");
   const head = document.createElement("thead");
   const heading = document.createElement("tr");
-  for (const label of ["思考等级", "IQ", "样本", "较上次"]) {
+  for (const label of ["思考等级", "雷达分", "样本", "较上次"]) {
     const cell = element("th", "", label);
     cell.scope = "col";
     heading.append(cell);
@@ -262,8 +263,8 @@ function createModelRow(model) {
 }
 
 function createCoverageNote() {
-  const note = element("span", "coverage-note", "样本覆盖不足");
-  note.title = "已测题目不足全部题目的 60%，IQ 仅供参考";
+  const note = element("span", "coverage-note", "阶段分");
+  note.title = "尚未覆盖全部题目，这是已覆盖题目的阶段分";
   return note;
 }
 
@@ -272,7 +273,7 @@ function renderSample(container, sample) {
   const coverage = element("span", "coverage-count", `${sample.sampledTaskCount} / ${currentState.snapshot.taskCount} 题`);
   coverage.hidden = !isNumber(sample.sampledTaskCount);
   container.replaceChildren(count, coverage);
-  container.title = `${numberFormatter.format(sample.rawSamples)} 次 · 已测 ${sample.sampledTaskCount} / ${currentState.snapshot.taskCount} 题`;
+  container.title = `${formatSample(sample)} · 已测 ${sample.sampledTaskCount} / ${currentState.snapshot.taskCount} 题`;
 }
 
 function updateModelRow(view, model, previous) {
@@ -281,14 +282,16 @@ function updateModelRow(view, model, previous) {
   view.name.textContent = model.label;
   view.name.title = model.modelId;
   view.runtime.textContent = model.runtimeLabel;
-  view.effortCount.textContent = `${model.efforts.length} 个等级`;
+  view.effortCount.textContent = model.bestEffort
+    ? `最高分 · ${model.bestEffort}` : `${model.efforts.length} 个等级`;
   view.coverageNote.hidden = !hasLowCoverage(model.sampledTaskCount, currentState.snapshot.taskCount);
   view.score.textContent = isNumber(model.iq) ? numberFormatter.format(model.iq) : "—";
   view.score.classList.toggle("missing", !isNumber(model.iq));
   renderSample(view.sample, model);
-  renderDelta(view.delta, valueDelta(previous?.iq, model.iq));
-  view.summary.setAttribute("aria-label", `${model.label}，${model.runtimeLabel}，DeepSWE 总体 ${view.score.textContent} IQ，${view.sample.textContent}${view.coverageNote.hidden ? "" : "，样本覆盖不足"}，较上次${view.delta.textContent}。展开查看思考等级`);
-  view.caption.textContent = `${model.label}（${model.runtimeLabel}）的 DeepSWE 思考等级 IQ`;
+  const previousBest = effortMap(previous).get(model.bestEffort);
+  renderDelta(view.delta, valueDelta(previousBest?.iq, model.iq));
+  view.summary.setAttribute("aria-label", `${model.label}，${model.runtimeLabel}，雷达Bench 最高分 ${view.score.textContent}，${model.bestEffort ?? "暂无已测档位"}，${view.sample.textContent}${view.coverageNote.hidden ? "" : "，阶段分"}，较上次${view.delta.textContent}。展开查看思考等级`);
+  view.caption.textContent = `${model.label}（${model.runtimeLabel}）的雷达Bench思考等级分数`;
   view.table.hidden = model.efforts.length === 0;
   view.noEfforts.hidden = model.efforts.length > 0;
 
@@ -415,13 +418,14 @@ function renderEmptyState(visibleCount) {
     emptyDescription.textContent = "下次刷新时会自动检查新增模型。";
   } else {
     emptyTitle.textContent = "正在读取模型数据…";
-    emptyDescription.textContent = "稍后即可查看所有模型的最新 IQ。";
+    emptyDescription.textContent = "稍后即可查看所有模型的最新雷达分。";
   }
 }
 
 function renderModels({ updateData = false, resetScroll = false } = {}) {
   const models = currentState?.snapshot?.models ?? [];
-  const previousModels = modelMap(currentState?.previousSnapshot);
+  const previousModels = modelMap(canCompareSnapshots(currentState?.previousSnapshot, currentState?.snapshot)
+    ? currentState.previousSnapshot : null);
   const groups = providerGroups(models);
   if (currentProvider && !groups.some((group) => group.id === currentProvider)) currentProvider = "";
   const filters = { query: modelSearch.value, runtime: runtimeFilter.value, sort: modelSort.value };
@@ -499,14 +503,17 @@ function renderMetadata(snapshot) {
     return;
   }
 
-  datasetMeta.textContent = `DeepSWE · ${providerGroups(snapshot.models).length} 厂商 · ${snapshot.models.length} 模型 · ${snapshot.taskCount} 任务`;
-  const source = snapshot.sourceUpdatedAt
-    ? `站点快照 ${formatDateTime(snapshot.sourceUpdatedAt)}`
-    : "站点快照时间未知";
-  sourceTime.textContent = `${source} · 本地获取 ${formatDateTime(snapshot.fetchedAt)}`;
+  datasetMeta.textContent = `雷达Bench · ${snapshot.models.length} 模型 · ${snapshot.comboCount} 档 · ${snapshot.taskCount} 题`;
+  sourceTime.textContent = `本地读取 ${formatDateTime(snapshot.fetchedAt)} · 数据可能来自缓存`;
+  sourceTime.title = "公开摘要未提供精确判分时间；读取时间不代表判分时间";
 }
 
 function renderState(state) {
+  // Old DeepSWE caches must not appear under the new benchmark label, including
+  // when the first new-source read fails. Settings remain available throughout.
+  if (state?.snapshot && state.snapshot.version !== 3) {
+    state = {...state, snapshot: null, previousSnapshot: null, lastSuccessAt: null};
+  }
   currentState = state;
   renderStatus(state);
   renderError(state);
@@ -593,7 +600,8 @@ async function initialize() {
     renderSettings(response.settings);
     renderState(response.state);
 
-    if (!response.state?.snapshot && response.state?.status !== "loading") {
+    if (response.state?.snapshot?.version !== 3 &&
+        !["loading", "refreshing"].includes(response.state?.status)) {
       await refreshNow();
     }
     void sendMessage({ type: "MARK_SEEN" }).catch(() => {});

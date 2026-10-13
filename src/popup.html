@@ -40,7 +40,7 @@
         <div class="section-heading">
           <div>
             <h2 id="overview-title">模型目录</h2>
-            <p>DeepSWE 软件工程 IQ · 点击模型展开思考等级</p>
+            <p>雷达Bench · 主行显示最高分档位，展开查看全部等级</p>
           </div>
           <span id="dataset-meta" class="dataset-meta"></span>
         </div>
@@ -61,7 +61,7 @@
           <label class="filter-select sort-select">
             <span class="sr-only">厂商组内排序</span>
             <select id="model-sort" title="每个厂商组内的模型排序">
-              <option value="iq">组内 IQ 从高到低</option>
+              <option value="iq">组内最高分从高到低</option>
               <option value="site">组内源站顺序</option>
               <option value="name">组内模型名称</option>
             </select>
@@ -75,7 +75,7 @@
           <div class="model-pane">
             <div class="list-heading row-layout" aria-hidden="true">
               <span id="result-count">模型 / 运行工具</span>
-              <span title="DeepSWE 软件工程题库，汇总该模型全部思考等级的有效样本">总体 IQ</span>
+              <span title="已测思考等级中的最高雷达分，样本与覆盖均取该档位">最高分</span>
               <span>样本</span>
               <span title="与上次成功获取的快照对比">较上次</span>
               <span></span>
@@ -122,7 +122,7 @@
                 step="0.5"
                 inputmode="decimal"
               />
-              <b>IQ</b>
+              <b>分</b>
             </span>
           </label>
         </div>

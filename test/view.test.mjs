@@ -134,11 +134,17 @@ test("deltas distinguish unchanged scores, unavailable scores, and actual zero I
   assert.equal(valueDelta(NaN, 110), null);
 });
 
-test("coverage warnings follow the source site's 60 percent tested-task threshold", () => {
-  assert.equal(hasLowCoverage(67, 112), true);
-  assert.equal(hasLowCoverage(68, 112), false);
-  assert.equal(hasLowCoverage(3, 5), false);
-  assert.equal(hasLowCoverage(0, 112), true);
+test("visible deltas follow one-decimal scores without displaying plus zero", () => {
+  assert.equal(valueDelta(99.9027, 99.9029), 0);
+  assert.equal(valueDelta(76.74, 76.76), 0.1);
+  assert.equal(valueDelta(76.76, 76.74), -0.1);
+});
+
+test("incomplete RadarBench coverage remains provisional until every task is measured", () => {
+  assert.equal(hasLowCoverage(38, 64), true);
+  assert.equal(hasLowCoverage(63, 64), true);
+  assert.equal(hasLowCoverage(64, 64), false);
+  assert.equal(hasLowCoverage(0, 64), true);
   assert.equal(hasLowCoverage(0, 0), false);
-  assert.equal(hasLowCoverage(undefined, 112), false);
+  assert.equal(hasLowCoverage(undefined, 64), false);
 });

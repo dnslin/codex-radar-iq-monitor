@@ -1,56 +1,43 @@
 # Codex Radar IQ Monitor
 
-一个无需持续打开 Codex Radar 页面、可以在 Chrome 后台定时汇总 DeepSWE 软件工程 IQ 的 Manifest V3 扩展。
+一个无需持续打开 Codex Radar 页面、可以在 Chrome 后台定时读取雷达Bench成绩的 Manifest V3 扩展。
 
-当前版本：0.8.1。更新内容见 [更新记录](CHANGELOG.md)。
+当前版本：0.9.0。更新内容见 [更新记录](CHANGELOG.md)。
 
 ## 功能
 
-- 自动读取 DeepSWE 接口中的所有模型与思考等级，源站新增模型后随刷新同步，无需修改固定名单。
-- 截至 2026-10-02，接口提供 25 条运行工具与模型记录、91 个思考档位，题库包含 112 道题：
-
-  | 运行工具 | 模型 |
-  |---|---|
-  | Codex | GPT-6 Astra / Sol / Luna、GPT-5.6 Sol / Terra / Luna、GPT-5.5、DeepSeek V4 Flash / V4.1 Flash |
-  | DSH | DeepSeek V4 Flash / Flash Vision Exp / V4.1 Flash |
-  | ZCode | GLM-5.3、GLM-5.3 Flash |
-  | Grok | Grok 4.6 / 4.7 |
-  | Kimi Code | Kimi K3、Kimi K2.8 Preview |
-  | Antigravity | Gemini 3.7 Flash / 3.8 Flash |
-  | CodeBuddy | HY4 Preview |
-  | Claude Code | Claude Sonnet 5、Claude Opus 5 / 5.5 |
-  | Kiro | Claude Opus 5.5（待采样）|
-
-- 按模型厂商分组：ChatGPT / OpenAI、DeepSeek、Claude / Anthropic、Gemini / Google、Grok / xAI、Kimi / 月之暗面、GLM / 智谱、混元 / 腾讯。左侧分类可快速切换，选择“全部厂商”时，右侧列表仍按厂商分段展示。
-- 分类导航和分组标题配有品牌图标，使用石墨灰深色主题、雾白浅色主题和蓝色选中状态。图标随扩展本地打包，无需联网加载；来源与许可见 [图标说明](icons/providers/README.md)。
-- 同厂商使用不同运行工具的模型归入同一组，各自保留 IQ 和工具标记。例如 Codex 与 DSH 测得的 DeepSeek 分数不会合并计算；Kiro 的 Claude 归入 Claude / Anthropic，与 Claude Code 分别展示。无法识别厂商的新模型显示在“其他”组，仍可正常查看。
-- 用紧凑列表展示总体 IQ，点击模型行展开各思考等级的 IQ、样本量和相对上次快照的变化。
-- 支持搜索模型、厂商或运行工具，识别 OpenAI、Anthropic、深度求索等名称。可结合厂商和运行工具筛选，按 IQ、站点顺序或名称在厂商组内排序。筛选只影响查看范围，后台仍监听全部模型。
-- 显示已测题数和样本量。总体及各思考等级分别计算覆盖率，已测题目不足题库的 60% 时提示“样本覆盖不足”；总体样本充足也不会隐藏稀疏档位的提醒。
+- 跟随新版雷达Bench公开成绩接口，直接显示服务端给出的 0–150 分成绩，不在扩展里重算。
+- 从公开目录动态发现模型与思考等级。截至 2026-10-13，目录包含 6 个 Codex 模型、34 个档位：GPT-6 Astra、GPT-6.1 Sol、GPT-6 Sol、GPT-5.6 Sol 各有 low / medium / high / xhigh / max / ultra，GPT-6 Luna 与 GPT-5.6 Luna 各有 low / medium / high / xhigh / max。新增配置随目录刷新同步。
+- 主行显示已测档位中的最高分，并标出对应思考等级、该档位的覆盖与计分样本量。各档位分别保留成绩；不生成跨档位的“总体 IQ”。点击模型行可展开全部档位的成绩、计分样本量和变化。
+- 雷达Bench包含 64 道题：DeepSWE 15 题、庞贝 16 题、TB 14 题、Science 19 题。每个档位独立显示覆盖题数；未覆盖全部 64 题时标为“阶段分”，没有有效判分时显示“待采样”。合法 0 分正常显示。
+- 按模型厂商分组，保留厂商与运行工具筛选、搜索和排序。当前新接口只提供 OpenAI 模型与 Codex；不会借用旧版多厂商成绩填充缺失项。无法识别厂商的新模型仍显示在“其他”组。
+- 分类导航和分组标题配有本地品牌图标，使用石墨灰深色主题、雾白浅色主题和蓝色选中状态。图标来源与许可见 [图标说明](icons/providers/README.md)。
+- 显示本机完成读取的时间。公开摘要未提供精确判分时刻，不把历史日期或目录发布时间当成实时更新时间。
 - 默认每 15 分钟在后台更新，也可改为 5、30 或 60 分钟。
 - 支持手动刷新。
 - 支持 `自动`、`浅色`、`深色` 三种主题：默认自动模式在本地时间 07:00–18:59 使用浅色，其余时间使用深色；手动选择会保存在本机。
-- 当 IQ 变化达到设定阈值时发送 Chrome 通知，并在扩展徽章显示未读变化模型数。
+- 当雷达分变化达到设定阈值时发送 Chrome 通知，并在扩展徽章显示未读变化模型数。
 - 刷新途中标记已读不会恢复旧的未读数。关闭通知或修改阈值后，进行中的刷新使用最新设置。
 - 页面未打开时仍会通过 Chrome Alarm 定期更新。
 
 ## 数据口径
 
-扩展直接读取 Codex Radar 的公开表格接口，不抓取页面 DOM。IQ 计算与站点当前前端实现保持一致：
+扩展从 [雷达Bench公开目录](https://codexradar.com/data/radar-bench-binding.json) 读取 `model_efforts`，再逐个读取公开成绩摘要：
 
 ```text
-score_sum = Σ(各单元格的 score_sum)
-samples   = Σ(各单元格的 n)
-IQ        = round(clamp(score_sum / samples, 0, 1) × 150)
+https://codexradar.com/api/radar-bench-score?model=<模型>&effort=<档位>&view=summary
+X-Radar-Bench-Selection: user-selected-v1
 ```
 
-按有效样本等权汇总，不使用额外权重。当 `score_sum` 缺失时使用接口的 `p`；没有有效样本时显示“待采样”。
+成绩取摘要的 `score`，满分取 `score_max`，已测题数取 `coverage`，题库题数取 `required_tasks`，计分样本量取 `graded_runs_count`。成绩保留一位小数。`score_status` 区分完整覆盖、阶段分和暂无有效判分。`score: 0` 是有效成绩，`score: null` 才表示待采样。
 
-当前 DeepSWE 为每格最近三次有效结果的等权汇总。总体 IQ 由全部档位的样本一起计算，不是各档 IQ 的算术平均。已测题数是至少存在一条有效样本的任务数，跨档位按任务去重。
+源站算法先对每题最近最多 3 次有效判分求平均，再对已覆盖题等权汇总，换算为 150 分。未覆盖题不按 0 分处理。扩展直接使用服务端成绩，不重新执行此计算，也不合并不同模型或档位。
 
-这里的 IQ 是 DeepSWE 软件工程成绩。原站首页的“综合智能”还合并了视觉题成绩，两者数值不能直接比较。
+`graded_runs_count` 是当前计分窗口内的样本数，每道题最多贡献 3 次。`statistics.sample_count` 是全部合格历史运行的统计样本数，两者口径不同。公开摘要无法对多个档位的题目覆盖去重，因此不显示跨档位的覆盖率或总分。
 
-同一基础模型通过不同运行工具测试时分别展示。例如 Codex 的 `deepseek-v4.1-flash` 与 DSH 的 `dsh-deepseek-v4.1-flash` 保留独立分数和通知。模型身份直接使用接口的 `combo.model`，运行工具取 `combo.agent`（缺省为 Codex）。展示名表只用于易读名称，不限制模型范围；尚未收录名称的新模型或工具会显示接口原名。
+目录的 `public_api_observed_at` 是目录观测时间。历史记录的 `updated_bucket` 是 UTC 日桶，只有日期精度。它们都不是最近一次判分的精确时刻；弹窗使用本机读取时间说明数据新鲜程度。
+
+0.9.0 的雷达Bench成绩与旧版 112 题 DeepSWE 软件工程 IQ 不是同一口径。升级后的第一份新版快照作为新的比较起点，不将跨题库、跨计分版本的差异发送为涨跌通知。
 
 ## 安装
 
@@ -75,8 +62,8 @@ GitHub 下载的 ZIP 不会自动更新已加载的扩展。下载新版本后�
 |---|---|
 | `alarms` | 定时刷新数据 |
 | `storage` | 保存最近快照、未读变化、监听设置和主题偏好 |
-| `notifications` | IQ 变化达到阈值时发送通知 |
-| `https://api.codexradar.com/*` | 读取 Codex Radar 的公开数据接口 |
+| `notifications` | 雷达分变化达到阈值时发送通知 |
+| `https://codexradar.com/*` | 读取 Codex Radar 的公开数据接口 |
 
 扩展没有内容脚本，不读取当前网页，也不访问浏览历史。
 
@@ -89,7 +76,7 @@ npm run smoke
 ```
 
 - `npm run check`：Manifest、发布脚本、JavaScript 语法和单元测试检查。后台回归测试覆盖刷新中的已读操作、通知开关、阈值更新和并发存储。
-- `npm run smoke`：请求实时接口，打印全部模型、运行工具及实际思考等级的 IQ 矩阵。
+- `npm run smoke`：读取实时目录和各档位公开摘要，打印全部模型、实际思考等级与服务端雷达分。
 - `node scripts/verify-popup.mjs`：在独立 Chrome 窗口验证真实工具栏弹窗的自然尺寸、模型数量、搜索和展开交互；前置条件及发布包验收方法见 [弹窗验证说明](docs/popup-verification.md)。
 
 ## 打包与发布
@@ -97,14 +84,14 @@ npm run smoke
 本地可以按 Chrome 扩展版本号生成发布包：
 
 ```bash
-npm run package -- v0.8.1
+npm run package -- v0.9.0
 ```
 
 输出文件：
 
 ```text
-dist/codex-radar-iq-monitor-v0.8.1.zip
-dist/codex-radar-iq-monitor-v0.8.1.zip.sha256
+dist/codex-radar-iq-monitor-v0.9.0.zip
+dist/codex-radar-iq-monitor-v0.9.0.zip.sha256
 ```
 
 推送形如 `v0.3.0` 的 tag 后，`.github/workflows/release.yml` 会自动：
@@ -177,7 +164,8 @@ codex-radar-monitor/
 
 ## 当前边界
 
-- 依赖 Codex Radar 当前公开 API 及字段结构；站点若调整接口，需要同步更新 `src/radar.js`。
-- 当前汇总 DeepSWE 软件工程题库，不混合庞贝壁画等其他 benchmark 的结果。
+- 依赖 Codex Radar 当前公开目录与雷达Bench成绩摘要；站点若调整接口，需要同步更新 `src/radar.js`。
+- 当前读取雷达Bench 64 题成绩，不继续读取旧版 DeepSWE 表格。公开目录之外的模型或档位不借用旧成绩。
+- 公开摘要不提供精确判分时间或逐题样本；界面使用本地读取时间，并保留服务端的独立档位成绩。
 - Chrome 的后台 Alarm 不是精确定时器，浏览器可能根据休眠和资源策略延后执行。
 - 本版本只保留“当前快照、上一次快照和最近变化”，暂不绘制长期历史曲线。

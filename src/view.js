@@ -4,11 +4,11 @@ export function isNumber(value) {
 
 export function valueDelta(previous, current) {
   if (!isNumber(previous) || !isNumber(current)) return null;
-  return current - previous;
+  return (Math.round(current * 10) - Math.round(previous * 10)) / 10;
 }
 
 export function hasLowCoverage(sampledTaskCount, taskCount) {
-  return isNumber(sampledTaskCount) && taskCount > 0 && sampledTaskCount / taskCount < 0.6;
+  return isNumber(sampledTaskCount) && taskCount > 0 && sampledTaskCount < taskCount;
 }
 
 const PROVIDERS = [

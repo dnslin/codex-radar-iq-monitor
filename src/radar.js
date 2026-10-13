@@ -1,5 +1,5 @@
-export const API_URL =
-  "https://api.codexradar.com/api/v1/table?benchmark=deep-swe";
+export const API_URL = "https://codexradar.com/api/radar-bench-score";
+export const BINDING_URL = "https://codexradar.com/data/radar-bench-binding.json";
 
 export const ALARM_NAME = "codex-radar-refresh";
 export const STATE_KEY = "radarState";
@@ -40,18 +40,6 @@ const MODEL_LABELS = new Map(Object.entries({
   "kiro-claude-opus-5.5": "Claude Opus 5.5",
 }));
 
-const RUNTIME_LABELS = new Map(Object.entries({
-  "codex": "Codex",
-  "dsh-minimal": "DSH",
-  "grok-build": "Grok",
-  "kimi-code": "Kimi Code",
-  "zcode": "ZCode",
-  "antigravity": "Antigravity",
-  "codebuddy": "CodeBuddy",
-  "claude-code": "Claude Code",
-  "kiro": "Kiro",
-}));
-
 export const DEFAULT_SETTINGS = Object.freeze({
   refreshMinutes: 15,
   notificationsEnabled: true,
@@ -69,37 +57,6 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-function sampleFromCell(cell) {
-  const sampleCount = Math.max(0, finiteNumber(cell?.n));
-  if (!sampleCount) {
-    return emptySample();
-  }
-
-  const scoreSum = cell?.score_sum != null && Number.isFinite(Number(cell.score_sum))
-    ? Number(cell.score_sum)
-    : finiteNumber(cell?.p);
-  return {
-    scoreSum,
-    rawSamples: sampleCount,
-  };
-}
-
-function emptySample() {
-  return { scoreSum: 0, rawSamples: 0 };
-}
-
-function addSample(target, source) {
-  target.scoreSum += source.scoreSum;
-  target.rawSamples += source.rawSamples;
-  return target;
-}
-
-function iqFromSample(sample) {
-  if (!sample.rawSamples) return null;
-  const ratio = clamp(sample.scoreSum / sample.rawSamples, 0, 1);
-  return Math.round(ratio * 150);
-}
-
 function sortEfforts(efforts) {
   return efforts.sort((left, right) => {
     const leftIndex = EFFORT_INDEX.get(left.effort) ?? Number.MAX_SAFE_INTEGER;
@@ -108,158 +65,146 @@ function sortEfforts(efforts) {
   });
 }
 
-/**
- * Converts the Codex Radar table response into the compact data used by the
- * extension. The IQ formula intentionally mirrors the website:
- * round(sum(score_sum) / sum(n) * 150).
- */
-export function buildSnapshot(table, fetchedAt = new Date().toISOString()) {
-  if (!table || typeof table !== "object") {
-    throw new TypeError("Radar API response must be an object");
+function catalogSelections(binding) {
+  if (!binding || binding.enabled !== true || binding.production_read_verified !== true ||
+      !Array.isArray(binding.model_efforts) || !Number.isInteger(binding.total_tasks) ||
+      binding.total_tasks <= 0 || binding.score_max !== 150 ||
+      ![binding.benchmark, binding.score_version, binding.catalog_version, binding.task_set_sha256]
+        .every((value) => typeof value === "string" && value.length > 0)) {
+    throw new TypeError("Radar API catalog is invalid or unavailable");
   }
-  if (!Array.isArray(table.tasks) || !Array.isArray(table.combos)) {
-    throw new TypeError("Radar API response is missing tasks or combos");
+  const selections = new Map();
+  for (const selection of binding.model_efforts) {
+    if (typeof selection?.model !== "string" || !selection.model.trim() ||
+        typeof selection.effort !== "string" || !selection.effort.trim()) {
+      throw new TypeError("Radar API catalog contains an invalid model/effort");
+    }
+    selections.set(`${selection.model}|${selection.effort}`, selection);
   }
-  if (!table.cells || typeof table.cells !== "object" || Array.isArray(table.cells)) {
-    throw new TypeError("Radar API response is missing cells");
-  }
+  return [...selections.values()];
+}
 
-  const comboKeys = new Set();
+function validateSummary(summary, binding, selection) {
+  const context = `${selection.model} ${selection.effort}`;
+  if (!summary || summary.model !== selection.model || summary.effort !== selection.effort ||
+      summary.benchmark !== binding.benchmark || summary.task_set_sha256 !== binding.task_set_sha256 ||
+      summary.catalog_version !== binding.catalog_version || summary.score_version !== binding.score_version ||
+      summary.score_max !== 150 || summary.required_tasks !== binding.total_tasks) {
+    throw new TypeError(`Radar API ${context} summary does not match the catalog`);
+  }
+  const validScore = typeof summary.score === "number" && Number.isFinite(summary.score) &&
+    summary.score >= 0 && summary.score <= 150;
+  if (!Number.isInteger(summary.coverage) || summary.coverage < 0 || summary.coverage > binding.total_tasks ||
+      (summary.coverage === 0 ? summary.score !== null : !validScore) ||
+      !(summary.graded_runs_count === null ||
+        Number.isInteger(summary.graded_runs_count) && summary.graded_runs_count >= 0)) {
+    throw new TypeError(`Radar API ${context} summary has invalid score, coverage or graded_runs_count`);
+  }
+  return summary;
+}
+
+// Scores are authoritative per effort. The model row shows its best measured
+// effort, including that same effort's coverage and samples; no cross-effort 雷达分.
+export function buildSnapshot(binding, summaries, fetchedAt = new Date().toISOString()) {
+  const selections = catalogSelections(binding);
+  if (!Array.isArray(summaries)) {
+    throw new TypeError("Radar API snapshot requires every catalog summary");
+  }
+  const summariesByKey = new Map();
+  for (const summary of summaries) {
+    const key = `${summary?.model}|${summary?.effort}`;
+    if (summariesByKey.has(key)) throw new TypeError(`Radar API duplicate summary: ${key}`);
+    summariesByKey.set(key, summary);
+  }
+  if (summariesByKey.size > selections.length) {
+    throw new TypeError("Radar API snapshot contains unexpected summaries");
+  }
   const modelsById = new Map();
-
-  for (const combo of table.combos) {
-    const model = String(combo?.model ?? "").trim();
-    const effort = String(combo?.effort ?? "").trim();
-    if (!model || !effort) continue;
-    const key = `${model}|${effort}`;
-    if (comboKeys.has(key)) continue;
-    comboKeys.add(key);
+  for (const selection of selections) {
+    const {model, effort} = selection;
+    const summary = validateSummary(summariesByKey.get(`${model}|${effort}`), binding, selection);
     if (!modelsById.has(model)) {
-      const runtime = String(combo.agent || "codex");
       modelsById.set(model, {
-        id: model,
-        modelId: model,
-        label: MODEL_LABELS.get(model) ?? model,
-        runtime,
-        runtimeLabel: RUNTIME_LABELS.get(runtime) ?? runtime,
-        efforts: new Set(),
+        id: model, modelId: model, label: MODEL_LABELS.get(model) ?? model,
+        runtime: "codex", runtimeLabel: "Codex", efforts: [],
       });
     }
-    modelsById.get(model).efforts.add(effort);
+    modelsById.get(model).efforts.push({
+      effort, iq: summary.score, rawSamples: summary.graded_runs_count,
+      sampledTaskCount: summary.coverage, scoreStatus: summary.score_status,
+    });
   }
-
   const models = [...modelsById.values()].map((model) => {
-    const modelSample = emptySample();
-    const sampledTasks = new Set();
-    const efforts = sortEfforts(
-      [...model.efforts].map((effort) => {
-        const effortSample = emptySample();
-        let sampledTaskCount = 0;
-
-        for (const task of table.tasks) {
-          const taskId = String(task?.id ?? "");
-          if (!taskId) continue;
-          const cell = table.cells[`${taskId}|${model.id}|${effort}`];
-          if (!cell) continue;
-          const sample = sampleFromCell(cell);
-          addSample(effortSample, sample);
-          if (sample.rawSamples > 0) {
-            sampledTaskCount += 1;
-            sampledTasks.add(taskId);
-          }
-        }
-
-        addSample(modelSample, effortSample);
-        return {
-          effort,
-          iq: iqFromSample(effortSample),
-          scoreSum: effortSample.scoreSum,
-          rawSamples: effortSample.rawSamples,
-          sampledTaskCount,
-        };
-      }),
-    );
-
-    return {
-      id: model.id,
-      label: model.label,
-      modelId: model.modelId,
-      runtime: model.runtime,
-      runtimeLabel: model.runtimeLabel,
-      iq: iqFromSample(modelSample),
-      scoreSum: modelSample.scoreSum,
-      rawSamples: modelSample.rawSamples,
-      sampledTaskCount: sampledTasks.size,
-      efforts,
-    };
+    sortEfforts(model.efforts);
+    const best = model.efforts.reduce((best, effort) =>
+      effort.iq !== null && (best === null || effort.iq > best.iq) ? effort : best, null);
+    return {...model, iq: best?.iq ?? null, bestEffort: best?.effort ?? null,
+      rawSamples: best ? best.rawSamples : 0, sampledTaskCount: best?.sampledTaskCount ?? 0};
   });
-
   return {
-    version: 2,
-    benchmarkId: String(table.benchmark_id ?? "deep-swe"),
-    scoringMode: String(table.scoring_mode ?? ""),
-    rollingWindow: finiteNumber(table.rolling_window, 0),
-    taskCount: table.tasks.length,
-    comboCount: comboKeys.size,
-    sourceUpdatedAt:
-      typeof table.baseline_generated_at === "string"
-        ? table.baseline_generated_at
-        : null,
-    fetchedAt,
-    models,
+    version: 3, benchmarkId: binding.benchmark, scoringMode: binding.score_version,
+    taskSetHash: binding.task_set_sha256, taskCount: binding.total_tasks,
+    comboCount: selections.length, sourceUpdatedAt: null, fetchedAt, models,
   };
 }
 
-export async function fetchRadarSnapshot(fetchImpl = fetch, timeoutMs = 15_000) {
+async function requestJson(url, fetchImpl, timeoutMs, context, headers = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    Math.max(1, finiteNumber(timeoutMs, 15_000)),
-  );
-
+  const timeout = setTimeout(() => controller.abort(), Math.max(1, finiteNumber(timeoutMs, 15_000)));
   try {
-    const response = await fetchImpl(API_URL, {
-      cache: "no-store",
-      headers: {
-        Accept: "application/json",
-      },
+    const response = await fetchImpl(url, {
+      cache: "no-store", credentials: "omit", headers: {Accept: "application/json", ...headers},
       signal: controller.signal,
     });
-
-    if (!response.ok) {
-      throw new Error(`Radar API request failed: HTTP ${response.status}`);
-    }
-
-    return buildSnapshot(await response.json());
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.json();
   } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error("Radar API request timed out");
-    }
-    throw error;
+    if (controller.signal.aborted) throw new Error(`Radar API ${context} request timed out`);
+    throw new Error(`Radar API ${context} request failed: ${error.message}`, {cause: error});
   } finally {
     clearTimeout(timeout);
   }
 }
 
+export async function fetchRadarSnapshot(fetchImpl = fetch, timeoutMs = 15_000) {
+  const binding = await requestJson(BINDING_URL, fetchImpl, timeoutMs, "catalog");
+  const selections = catalogSelections(binding);
+  const summaries = new Array(selections.length);
+  let index = 0;
+  let failure = null;
+  // Match the source site's three-request pool; never fan out all 34 requests.
+  async function worker() {
+    while (!failure && index < selections.length) {
+      const currentIndex = index++;
+      const selection = selections[currentIndex];
+      try {
+        const url = `${API_URL}?${new URLSearchParams({model: selection.model, effort: selection.effort, view: "summary"})}`;
+        const summary = await requestJson(url, fetchImpl, timeoutMs,
+          `${selection.model} ${selection.effort}`, {"X-Radar-Bench-Selection": "user-selected-v1"});
+        summaries[currentIndex] = validateSummary(summary, binding, selection);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+  }
+  await Promise.all(Array.from({length: Math.min(3, selections.length)}, worker));
+  if (failure) throw failure;
+  return buildSnapshot(binding, summaries);
+}
+
+export function canCompareSnapshots(previous, current) {
+  return Boolean(previous && current && previous.version === 3 && current.version === 3 &&
+    ["benchmarkId", "scoringMode", "taskSetHash"].every((key) =>
+      typeof previous[key] === "string" && previous[key].length > 0 && previous[key] === current[key]));
+}
+
 function valuesFromSnapshot(snapshot) {
   const values = new Map();
-  for (const model of snapshot?.models ?? []) {
-    values.set(model.id, {
-      scope: "model",
-      modelId: model.id,
-      modelLabel: model.label,
-      runtimeLabel: model.runtimeLabel,
-      effort: null,
-      iq: model.iq,
-    });
-    for (const effort of model.efforts ?? []) {
+  for (const model of snapshot.models) {
+    for (const effort of model.efforts) {
       values.set(`${model.id}@${effort.effort}`, {
-        scope: "effort",
-        modelId: model.id,
-        modelLabel: model.label,
-        runtimeLabel: model.runtimeLabel,
-        effort: effort.effort,
-        iq: effort.iq,
+        scope: "effort", modelId: model.id, modelLabel: model.label,
+        runtimeLabel: model.runtimeLabel, effort: effort.effort, iq: effort.iq,
       });
     }
   }
@@ -267,50 +212,30 @@ function valuesFromSnapshot(snapshot) {
 }
 
 export function compareSnapshots(previous, current, threshold = 0) {
-  if (!previous || !current) return [];
-
+  if (!canCompareSnapshots(previous, current)) return [];
   const minimumChange = clamp(finiteNumber(threshold), 0, 150);
   const before = valuesFromSnapshot(previous);
   const after = valuesFromSnapshot(current);
-  const keys = new Set([...before.keys(), ...after.keys()]);
   const changes = [];
-
-  for (const key of keys) {
+  for (const key of new Set([...before.keys(), ...after.keys()])) {
     const oldValue = before.get(key);
     const newValue = after.get(key);
     const value = newValue ?? oldValue;
-
     const oldIq = Number.isFinite(oldValue?.iq) ? oldValue.iq : null;
     const newIq = Number.isFinite(newValue?.iq) ? newValue.iq : null;
     if (oldIq === newIq) continue;
-
     let kind = "changed";
     let delta = null;
-    if (oldIq === null && newIq !== null) kind = "available";
-    else if (oldIq !== null && newIq === null) kind = "unavailable";
+    if (oldIq === null) kind = "available";
+    else if (newIq === null) kind = "unavailable";
     else delta = newIq - oldIq;
-
     if (delta !== null && Math.abs(delta) < minimumChange) continue;
-
-    changes.push({
-      key,
-      scope: value.scope,
-      modelId: value.modelId,
-      modelLabel: value.modelLabel,
-      runtimeLabel: value.runtimeLabel,
-      effort: value.effort,
-      oldIq,
-      newIq,
-      delta,
-      kind,
-    });
+    changes.push({key, scope: value.scope, modelId: value.modelId, modelLabel: value.modelLabel,
+      runtimeLabel: value.runtimeLabel, effort: value.effort, oldIq, newIq, delta, kind});
   }
-
-  return changes.sort((left, right) => {
-    const leftMagnitude = left.delta === null ? 151 : Math.abs(left.delta);
-    const rightMagnitude = right.delta === null ? 151 : Math.abs(right.delta);
-    return rightMagnitude - leftMagnitude || left.key.localeCompare(right.key);
-  });
+  return changes.sort((left, right) =>
+    (right.delta === null ? 151 : Math.abs(right.delta)) -
+    (left.delta === null ? 151 : Math.abs(left.delta)) || left.key.localeCompare(right.key));
 }
 
 export function normalizeSettings(value) {
@@ -341,15 +266,17 @@ export function normalizeSettings(value) {
   };
 }
 
+const scoreFormatter = new Intl.NumberFormat("zh-CN", {maximumFractionDigits: 1});
+
 export function formatChangeLabel(change) {
   const modelLabel = change.runtimeLabel
     ? `${change.modelLabel} · ${change.runtimeLabel}`
     : change.modelLabel;
   const target = change.effort
     ? `${modelLabel} ${change.effort}`
-    : `${modelLabel} 总体`;
-  if (change.kind === "available") return `${target}：新增 ${change.newIq} IQ`;
+    : modelLabel;
+  if (change.kind === "available") return `${target}：新增 ${scoreFormatter.format(change.newIq)} 雷达分`;
   if (change.kind === "unavailable") return `${target}：暂无数据`;
   const sign = change.delta > 0 ? "+" : "";
-  return `${target}：${change.newIq} IQ（${sign}${change.delta}）`;
+  return `${target}：${scoreFormatter.format(change.newIq)} 雷达分（${sign}${scoreFormatter.format(change.delta)}）`;
 }

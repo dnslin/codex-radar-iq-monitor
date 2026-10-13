@@ -11,7 +11,8 @@ const rows = snapshot.models.map((model) => {
   return {
     model: model.label,
     runtime: model.runtimeLabel,
-    overall: model.iq ?? "—",
+    best: model.iq ?? "—",
+    bestEffort: model.bestEffort ?? "—",
     ...Object.fromEntries(efforts.map((effort) => [effort, scores.get(effort) ?? "—"])),
   };
 });

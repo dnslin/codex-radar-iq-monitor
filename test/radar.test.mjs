@@ -1,366 +1,377 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  buildSnapshot,
-  compareSnapshots,
-  fetchRadarSnapshot,
-  formatChangeLabel,
-  normalizeSettings,
-} from "../src/radar.js";
-import {
-  nextThemeMode,
-  normalizeThemeMode,
-  resolveTheme,
-} from "../src/theme.js";
+import * as radar from "../src/radar.js";
+import { nextThemeMode, normalizeThemeMode, resolveTheme } from "../src/theme.js";
+import { bindingFixture, radarBenchFixture, summaryFixture } from "./fixtures/radar-bench.mjs";
 
-function fixture() {
+const { buildSnapshot, compareSnapshots, fetchRadarSnapshot, formatChangeLabel, normalizeSettings } = radar;
+const BINDING_URL = "https://codexradar.com/data/radar-bench-binding.json";
+
+function jsonResponse(value) {
+  return { ok: true, status: 200, json: async () => value };
+}
+
+function snapshotFixture(models = []) {
+  const binding = bindingFixture();
   return {
-    benchmark_id: "deep-swe",
-    scoring_mode: "binary-majority",
-    rolling_window: 3,
-    baseline_generated_at: "2026-08-10T01:00:00Z",
-    tasks: [{ id: "task-a" }, { id: "task-b" }],
-    combos: [
-      { model: "gpt-5.6-sol", effort: "high" },
-      { model: "gpt-5.6-sol", effort: "low" },
-      { model: "gpt-5.6-sol", effort: "low" },
-      { model: "unknown-model", effort: "high" },
-    ],
-    cells: {
-      "task-a|gpt-5.6-sol|low": {
-        n: 3,
-        score_sum: 2,
-        iq_weight: 2,
-      },
-      "task-b|gpt-5.6-sol|low": {
-        n: 2,
-        score_sum: 1,
-      },
-      "task-a|gpt-5.6-sol|high": {
-        n: 1,
-        score_sum: 1,
-      },
-      "task-b|gpt-5.6-sol|high": {
-        n: 0,
-        score_sum: 100,
-      },
-    },
+    version: 3,
+    benchmarkId: binding.benchmark,
+    scoringMode: binding.score_version,
+    taskSetHash: binding.task_set_sha256,
+    taskCount: binding.total_tasks,
+    models,
   };
 }
 
-test("buildSnapshot uses the site's equal sample IQ formula and ignores obsolete cell weights", () => {
-  const snapshot = buildSnapshot(fixture(), "2026-08-10T02:00:00Z");
-  const sol = snapshot.models.find((model) => model.id === "gpt-5.6-sol");
+function multipleEffortsFixture(count = 7) {
+  const pairs = Array.from({ length: count }, (_, index) => ({ model: `future-model-${index}`, effort: "high" }));
+  return {
+    binding: bindingFixture({ model_efforts: pairs }),
+    summaries: pairs.map((pair, index) => summaryFixture({ ...pair, score: index })),
+  };
+}
 
-  assert.equal(snapshot.taskCount, 2);
+function stallUntilAborted(signal) {
+  return new Promise((_resolve, reject) => {
+    const abort = () => reject(new DOMException("aborted", "AbortError"));
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+test("buildSnapshot copies public Radar Bench scores without recomputing or rounding", () => {
+  const { binding, summaries } = radarBenchFixture();
+  const fetchedAt = "2026-10-13T06:00:00.000Z";
+  const snapshot = buildSnapshot(binding, summaries, fetchedAt);
+  const sol = snapshot.models.find((model) => model.id === "gpt-6.1-sol");
+  assert.equal(snapshot.version, 3);
+  assert.equal(snapshot.benchmarkId, binding.benchmark);
+  assert.equal(snapshot.scoringMode, binding.score_version);
+  assert.equal(snapshot.taskSetHash, binding.task_set_sha256);
+  assert.equal(snapshot.taskCount, 64);
   assert.equal(snapshot.comboCount, 3);
-  assert.deepEqual(
-    sol.efforts.map((effort) => effort.effort),
-    ["low", "high"],
-  );
-
-  const low = sol.efforts.find((effort) => effort.effort === "low");
-  assert.equal(low.scoreSum, 3);
-  assert.equal(low.rawSamples, 5);
-  assert.equal(low.iq, 90);
-  assert.equal(low.sampledTaskCount, 2);
-  assert.equal(sol.efforts.find((effort) => effort.effort === "high").sampledTaskCount, 1);
-
-  assert.equal(sol.scoreSum, 4);
-  assert.equal(sol.rawSamples, 6);
-  assert.equal(sol.iq, 100);
-  assert.equal(sol.sampledTaskCount, 2, "the same task at two efforts counts once for coverage");
-  assert.equal(Object.hasOwn(sol, "weightedSamples"), false);
-  assert.equal(Object.hasOwn(low, "weightedScore"), false);
+  assert.equal(snapshot.sourceUpdatedAt, null);
+  assert.equal(snapshot.fetchedAt, fetchedAt);
+  assert.deepEqual(sol.efforts, [
+    { effort: "medium", iq: 76.71583850931677, rawSamples: 50, sampledTaskCount: 48, scoreStatus: "provisional" },
+    { effort: "high", iq: 75.25, rawSamples: 55, sampledTaskCount: 49, scoreStatus: "provisional" },
+  ]);
+  assert.equal(sol.iq, 76.71583850931677);
+  assert.equal(sol.bestEffort, "medium");
+  assert.equal(sol.rawSamples, 50);
+  assert.equal(sol.sampledTaskCount, 48);
+  assert.equal(Object.hasOwn(sol, "scoreSum"), false);
+  assert.equal(Object.hasOwn(snapshot, "rollingWindow"), false);
 });
 
-test("buildSnapshot discovers models from the API, including unfamiliar models", () => {
-  const snapshot = buildSnapshot(fixture());
-
-  assert.deepEqual(
-    snapshot.models.map((model) => model.id),
-    ["gpt-5.6-sol", "unknown-model"],
-  );
-  const unknown = snapshot.models[1];
-  assert.equal(unknown.label, "unknown-model");
-  assert.equal(unknown.iq, null);
-  assert.deepEqual(unknown.efforts.map((value) => [value.effort, value.iq]), [["high", null]]);
+test("buildSnapshot discovers unfamiliar catalog models and keeps unavailable scores null", () => {
+  const { binding, summaries } = radarBenchFixture();
+  const snapshot = buildSnapshot(binding, summaries);
+  assert.deepEqual(snapshot.models.map((model) => model.id), ["gpt-6.1-sol", "future-model"]);
+  assert.equal(snapshot.models[0].label, "GPT-6.1 Sol");
   assert.equal(snapshot.models[0].runtimeLabel, "Codex");
+  const future = snapshot.models[1];
+  assert.equal(future.label, "future-model");
+  assert.equal(future.iq, null);
+  assert.equal(future.bestEffort, null);
+  assert.deepEqual(future.efforts, [
+    { effort: "high", iq: null, rawSamples: null, sampledTaskCount: 0, scoreStatus: "missing_current_result" },
+  ]);
   assert.equal(snapshot.models.some((model) => model.id === "gpt-5.6-terra"), false);
 });
 
-test("buildSnapshot includes the current site's added models and their runtime labels", () => {
-  const addedModels = [
-    ["gpt-6-astra", undefined, "GPT-6 Astra", "Codex"],
-    ["dsh-deepseek-v4-flash", "dsh-minimal", "DeepSeek V4 Flash", "DSH"],
-    ["dsh-deepseek-v4-pro", "dsh-minimal", "DeepSeek V4 Pro", "DSH"],
-    ["dsh-deepseek-v4-flash-vision-exp", "dsh-minimal", "DeepSeek V4 Flash Vision Exp", "DSH"],
-    ["grok-4.6", "grok-build", "Grok 4.6", "Grok"],
-    ["k3", "kimi-code", "Kimi K3", "Kimi Code"],
-    ["glm-5.3", "zcode", "GLM-5.3", "ZCode"],
-    ["glm-5.3-flash", "zcode", "GLM-5.3 Flash", "ZCode"],
-    ["gemini-3.7-flash", "antigravity", "Gemini 3.7 Flash", "Antigravity"],
-    ["hy4-preview", "codebuddy", "HY4 Preview", "CodeBuddy"],
-    ["claude-sonnet-5", "claude-code", "Claude Sonnet 5", "Claude Code"],
-    ["claude-opus-5", "claude-code", "Claude Opus 5", "Claude Code"],
-    ["gpt-6.1-sol", undefined, "GPT-6.1 Sol", "Codex"],
-    ["gpt-6-sol", undefined, "GPT-6 Sol", "Codex"],
-    ["gpt-6-luna", undefined, "GPT-6 Luna", "Codex"],
-    ["deepseek-v4.1-flash", undefined, "DeepSeek V4.1 Flash", "Codex"],
-    ["dsh-deepseek-v4.1-flash", "dsh-minimal", "DeepSeek V4.1 Flash", "DSH"],
-    ["grok-4.7", "grok-build", "Grok 4.7", "Grok"],
-    ["gemini-3.8-flash", "antigravity", "Gemini 3.8 Flash", "Antigravity"],
-    ["kimi-k2.8-preview", "kimi-code", "Kimi K2.8 Preview", "Kimi Code"],
-    ["claude-opus-5-5", "claude-code", "Claude Opus 5.5", "Claude Code"],
-    ["kiro-claude-opus-5.5", "kiro", "Claude Opus 5.5", "Kiro"],
+test("a true zero score remains distinct from an unavailable score", () => {
+  const binding = bindingFixture({ model_efforts: [
+    { model: "gpt-6.1-sol", effort: "medium" },
+    { model: "gpt-6.1-sol", effort: "high" },
+  ] });
+  const summaries = [
+    summaryFixture({ score: null, coverage: 0, graded_runs_count: null, score_status: "missing_current_result" }),
+    summaryFixture({ effort: "high", score: 0, coverage: 1, graded_runs_count: 1 }),
   ];
-  const input = fixture();
-  input.combos = addedModels.map(([model, agent]) => ({ model, agent, effort: "high", manual_only: true }));
-  input.cells = Object.fromEntries(addedModels.map(([model]) => [
-    `task-a|${model}|high`, { n: 2, score_sum: 1 },
-  ]));
-
-  const snapshot = buildSnapshot(input);
-  assert.deepEqual(snapshot.models.map((model) => [model.id, model.label, model.runtimeLabel, model.iq]),
-    addedModels.map(([id, _agent, label, runtime]) => [id, label, runtime, 75]));
-  assert.ok(snapshot.models.every((model) => !Object.hasOwn(model, "statusLabel")));
+  const sol = buildSnapshot(binding, summaries).models[0];
+  assert.equal(sol.efforts[0].iq, null);
+  assert.equal(sol.efforts[1].iq, 0);
+  assert.equal(sol.iq, 0);
+  assert.equal(sol.bestEffort, "high");
+  assert.equal(sol.rawSamples, 1);
+  assert.equal(sol.sampledTaskCount, 1);
 });
 
-test("Claude Code and Kiro keep independent scores for Claude Opus 5.5", () => {
-  const input = fixture();
-  input.combos = [
-    { model: "claude-opus-5-5", agent: "claude-code", effort: "high" },
-    { model: "kiro-claude-opus-5.5", agent: "kiro", effort: "high" },
+test("equal best scores use the first effort in effort order and its own coverage/samples", () => {
+  const binding = bindingFixture({ model_efforts: [
+    { model: "gpt-6.1-sol", effort: "high" },
+    { model: "gpt-6.1-sol", effort: "low" },
+  ] });
+  const summaries = [
+    summaryFixture({ effort: "high", score: 100, graded_runs_count: 60, coverage: 54 }),
+    summaryFixture({ effort: "low", score: 100, graded_runs_count: null, coverage: 40 }),
   ];
-  input.cells = {
-    "task-a|claude-opus-5-5|high": { n: 3, score_sum: 1 },
-    "task-a|kiro-claude-opus-5.5|high": { n: 3, score_sum: 2 },
-  };
-  assert.deepEqual(buildSnapshot(input).models.map((model) => [model.label, model.runtimeLabel, model.iq]), [
-    ["Claude Opus 5.5", "Claude Code", 50],
-    ["Claude Opus 5.5", "Kiro", 100],
+  const sol = buildSnapshot(binding, summaries).models[0];
+  assert.deepEqual(sol.efforts.map((value) => value.effort), ["low", "high"]);
+  assert.equal(sol.bestEffort, "low");
+  assert.equal(sol.iq, 100);
+  assert.equal(sol.rawSamples, null);
+  assert.equal(sol.sampledTaskCount, 40);
+});
+
+test("future efforts remain sorted and catalog duplicates do not duplicate scores", () => {
+  const efforts = ["extended", "high", "off", "minimal", "low", "high"];
+  const binding = bindingFixture({ model_efforts: efforts.map((effort) => ({ model: "future-model", effort })) });
+  const summaries = [...new Set(efforts)].map((effort) => summaryFixture({ model: "future-model", effort, score: 0 }));
+  const snapshot = buildSnapshot(binding, summaries);
+  assert.equal(snapshot.comboCount, 5);
+  assert.deepEqual(snapshot.models[0].efforts.map((value) => value.effort), ["off", "minimal", "low", "high", "extended"]);
+});
+
+test("separate catalog identities retain independent scores for the same display name", () => {
+  const binding = bindingFixture({ model_efforts: [
+    { model: "claude-opus-5-5", effort: "high" },
+    { model: "kiro-claude-opus-5.5", effort: "high" },
+  ] });
+  const summaries = [
+    summaryFixture({ model: "claude-opus-5-5", effort: "high", score: 50 }),
+    summaryFixture({ model: "kiro-claude-opus-5.5", effort: "high", score: 100 }),
+  ];
+  assert.deepEqual(buildSnapshot(binding, summaries).models.map((model) => [model.id, model.label, model.runtimeLabel, model.iq]), [
+    ["claude-opus-5-5", "Claude Opus 5.5", "Codex", 50],
+    ["kiro-claude-opus-5.5", "Claude Opus 5.5", "Codex", 100],
   ]);
 });
 
-test("Codex and DSH keep separate scores for the same underlying DeepSeek model", () => {
-  const input = fixture();
-  input.combos = [
-    { model: "deepseek-v4-pro", effort: "high" },
-    { model: "dsh-deepseek-v4-pro", agent: "dsh-minimal", effort: "high" },
-  ];
-  input.cells = {
-    "task-a|deepseek-v4-pro|high": { n: 3, score_sum: 1 },
-    "task-a|dsh-deepseek-v4-pro|high": { n: 3, score_sum: 2 },
-  };
-  const snapshot = buildSnapshot(input);
-  assert.deepEqual(snapshot.models.map((model) => [model.runtimeLabel, model.iq]), [["Codex", 50], ["DSH", 100]]);
-  assert.notEqual(snapshot.models[0].id, snapshot.models[1].id);
-});
-
-test("future runtimes and efforts are retained, sorted and deduplicated", () => {
-  const input = fixture();
-  input.combos = ["extended", "high", "off", "minimal", "low", "high"].map((effort) => ({
-    model: "future-model", agent: "future-tool", effort,
-  }));
-  input.combos.push({ model: "", effort: "high" }, { model: "invalid", effort: "" });
-  const snapshot = buildSnapshot(input);
-  assert.equal(snapshot.comboCount, 5);
-  assert.equal(snapshot.models.length, 1);
-  assert.equal(snapshot.models[0].runtimeLabel, "future-tool");
-  assert.deepEqual(snapshot.models[0].efforts.map((value) => value.effort), ["off", "minimal", "low", "high", "extended"]);
-  assert.equal(snapshot.models[0].iq, null);
-});
-
-test("empty API catalog does not invent monitored models", () => {
-  const snapshot = buildSnapshot({ tasks: [], combos: [], cells: {} });
+test("an empty catalog does not invent monitored models", () => {
+  const snapshot = buildSnapshot(bindingFixture({ model_efforts: [] }), []);
   assert.deepEqual(snapshot.models, []);
   assert.equal(snapshot.comboCount, 0);
 });
 
-test("buildSnapshot falls back to p when score_sum is invalid", () => {
-  const input = fixture();
-  input.cells["task-a|gpt-5.6-sol|low"] = {
-    n: 2,
-    p: 1,
-    score_sum: "not-a-number",
-  };
-  delete input.cells["task-b|gpt-5.6-sol|low"];
-
-  const snapshot = buildSnapshot(input);
-  const low = snapshot.models[0].efforts.find((effort) => effort.effort === "low");
-
-  assert.equal(low.scoreSum, 1);
-  assert.equal(low.rawSamples, 2);
-  assert.equal(low.iq, 75);
+test("missing summaries fail rather than producing a partial snapshot", () => {
+  const { binding, summaries } = radarBenchFixture();
+  assert.throws(() => buildSnapshot(binding, summaries.slice(1)), /gpt-6\.1-sol.*high|high.*gpt-6\.1-sol/);
 });
 
-test("buildSnapshot validates required API fields", () => {
-  assert.throws(() => buildSnapshot(null), /must be an object/);
-  assert.throws(() => buildSnapshot({ tasks: [], combos: [] }), /missing cells/);
-  assert.throws(() => buildSnapshot({ cells: {} }), /missing tasks or combos/);
+for (const [field, value] of [
+  ["benchmark", "another-benchmark"], ["task_set_sha256", "another-task-set"],
+  ["model", "another-model"], ["effort", "ultra"], ["required_tasks", 63],
+  ["score_version", "another-score-version"], ["score_max", 100],
+]) {
+  test(`buildSnapshot rejects a summary with mismatched ${field}`, () => {
+    assert.throws(() => buildSnapshot(bindingFixture(), [summaryFixture({ [field]: value })]), /mismatch|does not match|missing|unexpected|invalid/i);
+  });
+}
+
+for (const score of [-1, 150.01, "76.7", undefined, NaN, Infinity, {}]) {
+  test(`buildSnapshot rejects invalid score ${String(score)}`, () => {
+    assert.throws(() => buildSnapshot(bindingFixture(), [summaryFixture({ score })]), /score/i);
+  });
+}
+
+for (const coverage of [-1, 65, 1.5, "48", null, undefined]) {
+  test(`buildSnapshot rejects invalid task coverage ${String(coverage)}`, () => {
+    assert.throws(() => buildSnapshot(bindingFixture(), [summaryFixture({ coverage })]), /coverage/i);
+  });
+}
+
+for (const graded_runs_count of [-1, 1.5, "50", undefined, NaN, Infinity]) {
+  test(`buildSnapshot rejects invalid graded run count ${String(graded_runs_count)}`, () => {
+    assert.throws(() => buildSnapshot(bindingFixture(), [summaryFixture({ graded_runs_count })]), /graded_runs_count|graded.*count/i);
+  });
+}
+
+test("score endpoints accept inclusive limits and preserve a null graded run count", () => {
+  for (const score of [0, 150, null]) {
+    const snapshot = buildSnapshot(bindingFixture(), [summaryFixture({
+      score,
+      coverage: score === null ? 0 : 64,
+      score_status: score === null ? "missing_current_result" : "complete",
+      graded_runs_count: null,
+    })]);
+    assert.equal(snapshot.models[0].efforts[0].iq, score);
+    assert.equal(snapshot.models[0].efforts[0].rawSamples, null);
+  }
 });
 
-test("null score_sum uses the site's pass count instead of reporting zero IQ", () => {
-  const input = fixture();
-  input.cells = { "task-a|gpt-5.6-sol|low": { n: 2, p: 1, score_sum: null } };
-  assert.equal(buildSnapshot(input).models[0].iq, 75);
+test("canCompareSnapshots requires matching current snapshot metadata", () => {
+  assert.equal(typeof radar.canCompareSnapshots, "function");
+  const snapshot = snapshotFixture();
+  assert.equal(radar.canCompareSnapshots(snapshot, structuredClone(snapshot)), true);
+  assert.equal(radar.canCompareSnapshots(null, snapshot), false);
+  assert.equal(radar.canCompareSnapshots(snapshot, null), false);
+  assert.equal(radar.canCompareSnapshots({ models: [] }, { models: [] }), false);
+  for (const [field, value] of [
+    ["version", 2], ["benchmarkId", "another-benchmark"],
+    ["scoringMode", "another-policy"], ["taskSetHash", "another-task-set"],
+  ]) {
+    assert.equal(radar.canCompareSnapshots(snapshot, { ...snapshot, [field]: value }), false, field);
+    const missing = { ...snapshot };
+    delete missing[field];
+    assert.equal(radar.canCompareSnapshots(snapshot, missing), false, `missing ${field}`);
+  }
 });
 
-test("compareSnapshots filters numeric changes using the configured threshold", () => {
-  const previous = {
-    models: [
-      {
-        id: "gpt-5.6-sol",
-        label: "GPT-5.6 Sol",
-        iq: 120,
-        efforts: [
-          { effort: "low", iq: 115 },
-          { effort: "high", iq: 125 },
-        ],
-      },
-    ],
-  };
-  const current = {
-    models: [
-      {
-        id: "gpt-5.6-sol",
-        label: "GPT-5.6 Sol",
-        iq: 121,
-        efforts: [
-          { effort: "low", iq: 118 },
-          { effort: "high", iq: 123 },
-        ],
-      },
-    ],
-  };
-
-  const changes = compareSnapshots(previous, current, 2);
-  assert.deepEqual(
-    changes.map((change) => [change.key, change.delta]),
-    [
-      ["gpt-5.6-sol@low", 3],
-      ["gpt-5.6-sol@high", -2],
-    ],
-  );
+test("incompatible metadata and legacy caches establish a new baseline without notifications", () => {
+  const current = snapshotFixture([{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol", iq: 80, efforts: [{ effort: "high", iq: 80 }] }]);
+  for (const previous of [
+    null,
+    { version: 2, benchmarkId: "deep-swe", models: [{ id: "gpt-6.1-sol", iq: 120, efforts: [{ effort: "high", iq: 120 }] }] },
+    { ...current, benchmarkId: "another-benchmark" },
+    { ...current, scoringMode: "another-policy" },
+    { ...current, taskSetHash: "another-task-set" },
+  ]) assert.deepEqual(compareSnapshots(previous, current), []);
 });
 
-test("compareSnapshots reports a newly available effort", () => {
-  const previous = {
-    models: [
-      {
-        id: "gpt-5.5",
-        label: "GPT-5.5",
-        iq: null,
-        efforts: [{ effort: "high", iq: null }],
-      },
-    ],
-  };
-  const current = {
-    models: [
-      {
-        id: "gpt-5.5",
-        label: "GPT-5.5",
-        iq: 110,
-        efforts: [{ effort: "high", iq: 110 }],
-      },
-    ],
-  };
-
-  const changes = compareSnapshots(previous, current, 20);
-  assert.equal(changes.length, 2);
-  assert.ok(changes.every((change) => change.kind === "available"));
+test("compareSnapshots applies the threshold to efforts and never compares model totals", () => {
+  const previous = snapshotFixture([{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol", iq: 125, efforts: [
+    { effort: "low", iq: 115 }, { effort: "high", iq: 125 },
+  ] }]);
+  const current = snapshotFixture([{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol", iq: 123, efforts: [
+    { effort: "low", iq: 118 }, { effort: "high", iq: 123 },
+  ] }]);
+  assert.deepEqual(compareSnapshots(previous, current, 2).map((change) => [change.key, change.scope, change.delta]), [
+    ["gpt-6.1-sol@low", "effort", 3], ["gpt-6.1-sol@high", "effort", -2],
+  ]);
 });
 
-test("new API models and efforts notify once they have scores, without an initial alert flood", () => {
-  const previous = { models: [{ id: "k3", label: "Kimi K3", runtimeLabel: "Kimi Code", iq: 90, efforts: [] }] };
-  const current = { models: [
-    { ...previous.models[0], efforts: [{ effort: "max", iq: 105 }] },
-    { id: "future-model", label: "Future model", runtimeLabel: "Future tool", iq: 100, efforts: [] },
+test("new efforts notify once available, including true zero, without an initial alert flood", () => {
+  const previous = snapshotFixture([{ id: "k3", label: "Kimi K3", runtimeLabel: "Kimi Code", iq: null, efforts: [{ effort: "max", iq: null }] }]);
+  const current = snapshotFixture([
+    { ...previous.models[0], iq: 0, efforts: [{ effort: "max", iq: 0 }] },
+    { id: "future-model", label: "Future model", runtimeLabel: "Future tool", iq: 100, efforts: [{ effort: "high", iq: 100 }] },
     { id: "unsampled", label: "Unsampled", iq: null, efforts: [{ effort: "high", iq: null }] },
-  ] };
+  ]);
   assert.deepEqual(compareSnapshots(null, current), []);
   const changes = compareSnapshots(previous, current, 20);
   assert.deepEqual(changes.map((change) => [change.key, change.kind]), [
-    ["future-model", "available"], ["k3@max", "available"],
+    ["future-model@high", "available"], ["k3@max", "available"],
   ]);
+  assert.equal(changes.find((change) => change.key === "k3@max").newIq, 0);
   assert.equal(changes.find((change) => change.key === "k3@max").runtimeLabel, "Kimi Code");
 });
 
-test("removed API combinations report unavailable, not a fall to zero IQ", () => {
-  const previous = { models: [{ id: "old-model", label: "Old model", iq: 90, efforts: [] }] };
-  const changes = compareSnapshots(previous, { models: [] });
-  assert.equal(changes.length, 1);
-  assert.equal(changes[0].kind, "unavailable");
-  assert.equal(changes[0].delta, null);
-  assert.equal(changes[0].newIq, null);
+test("removed efforts and unavailable scores report unavailable rather than a fall to zero", () => {
+  const previous = snapshotFixture([{ id: "old-model", label: "Old model", iq: 90, efforts: [{ effort: "high", iq: 90 }] }]);
+  for (const current of [snapshotFixture([]), snapshotFixture([{ id: "old-model", label: "Old model", iq: null, efforts: [{ effort: "high", iq: null }] }])]) {
+    const changes = compareSnapshots(previous, current);
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].key, "old-model@high");
+    assert.equal(changes[0].kind, "unavailable");
+    assert.equal(changes[0].delta, null);
+    assert.equal(changes[0].newIq, null);
+  }
 });
 
-test("notifications distinguish the runtime of identically named models", () => {
+test("notifications distinguish runtime and describe the public Radar score", () => {
   const change = { modelLabel: "DeepSeek V4 Pro", runtimeLabel: "DSH", effort: "high", kind: "changed", newIq: 90, delta: 3 };
-  assert.equal(formatChangeLabel(change), "DeepSeek V4 Pro · DSH high：90 IQ（+3）");
+  assert.match(formatChangeLabel(change), /^DeepSeek V4 Pro · DSH high：90 (?:IQ|雷达分)（\+3）$/);
+});
+
+test("notification labels round public scores and deltas to one decimal without changing snapshot precision", () => {
+  const change = { modelLabel: "GPT-6.1 Sol", runtimeLabel: "Codex", effort: "medium", kind: "changed", newIq: 76.71583850931677, delta: -1.63225188317696 };
+  assert.equal(formatChangeLabel(change), "GPT-6.1 Sol · Codex medium：76.7 雷达分（-1.6）");
+  assert.equal(formatChangeLabel({ ...change, kind: "available" }), "GPT-6.1 Sol · Codex medium：新增 76.7 雷达分");
+});
+
+test("fetchRadarSnapshot fetches the catalog before deduplicated public summaries", async () => {
+  const { binding, summaries } = radarBenchFixture();
+  const requested = [];
+  const snapshot = await fetchRadarSnapshot(async (value, options) => {
+    const url = new URL(value);
+    requested.push(url.href);
+    assert.equal(options.cache, "no-store");
+    assert.equal(options.method ?? "GET", "GET");
+    assert.equal(new Headers(options.headers).get("Accept"), "application/json");
+    if (url.href === BINDING_URL) return jsonResponse(binding);
+    assert.equal(requested[0], BINDING_URL);
+    assert.equal(url.origin, "https://codexradar.com");
+    assert.equal(url.pathname, "/api/radar-bench-score");
+    assert.equal(url.searchParams.get("view"), "summary");
+    assert.equal(new Headers(options.headers).get("X-Radar-Bench-Selection"), "user-selected-v1");
+    const summary = summaries.find((entry) => entry.model === url.searchParams.get("model") && entry.effort === url.searchParams.get("effort"));
+    assert.ok(summary, `unexpected summary request ${url.href}`);
+    return jsonResponse(summary);
+  });
+  assert.equal(requested.length, 4);
+  assert.equal(new Set(requested).size, 4);
+  assert.equal(snapshot.benchmarkId, binding.benchmark);
+});
+
+test("fetchRadarSnapshot uses at most three concurrent summary requests", async () => {
+  const { binding, summaries } = multipleEffortsFixture();
+  let active = 0;
+  let maximumActive = 0;
+  const snapshot = await fetchRadarSnapshot(async (value) => {
+    const url = new URL(value);
+    if (url.href === BINDING_URL) return jsonResponse(binding);
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active -= 1;
+    return jsonResponse(summaries.find((summary) => summary.model === url.searchParams.get("model")));
+  });
+  assert.equal(maximumActive, 3);
+  assert.equal(active, 0);
+  assert.equal(snapshot.comboCount, 7);
+});
+
+test("catalog HTTP errors surface before any summary requests", async () => {
+  const requested = [];
+  await assert.rejects(() => fetchRadarSnapshot(async (url) => {
+    requested.push(String(url));
+    return { ok: false, status: 503 };
+  }), /catalog.*HTTP 503/);
+  assert.deepEqual(requested, [BINDING_URL]);
+});
+
+test("HTTP 429 fails with model/effort context and stops queued summary requests", async () => {
+  const { binding, summaries } = multipleEffortsFixture();
+  const requested = [];
+  await assert.rejects(() => fetchRadarSnapshot(async (value) => {
+    const url = new URL(value);
+    if (url.href === BINDING_URL) return jsonResponse(binding);
+    const model = url.searchParams.get("model");
+    requested.push(model);
+    if (model === "future-model-0") return { ok: false, status: 429 };
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return jsonResponse(summaries.find((summary) => summary.model === model));
+  }), /future-model-0.*high.*HTTP 429/);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(requested.length <= 3, `queued requests continued after failure: ${requested.join(", ")}`);
+});
+
+test("summary network failures preserve model/effort context", async () => {
+  await assert.rejects(() => fetchRadarSnapshot(async (url) => {
+    if (String(url) === BINDING_URL) return jsonResponse(bindingFixture());
+    throw new Error("connection reset");
+  }), /gpt-6\.1-sol.*medium.*connection reset/);
+});
+
+test("fetchRadarSnapshot aborts a stalled catalog request", async () => {
+  await assert.rejects(() => fetchRadarSnapshot(async (_url, options) => stallUntilAborted(options.signal), 5), /catalog.*timed out/);
+});
+
+test("fetchRadarSnapshot aborts a stalled summary with model/effort context", async () => {
+  await assert.rejects(() => fetchRadarSnapshot(async (url, options) => {
+    if (String(url) === BINDING_URL) return jsonResponse(bindingFixture());
+    return stallUntilAborted(options.signal);
+  }, 5), /gpt-6\.1-sol.*medium.*timed out/);
+});
+
+test("each request gets its own timeout rather than sharing the catalog deadline", async () => {
+  const snapshot = await fetchRadarSnapshot(async (url, options) => {
+    await Promise.race([
+      new Promise((resolve) => setTimeout(resolve, 50)), stallUntilAborted(options.signal),
+    ]);
+    return jsonResponse(String(url) === BINDING_URL ? bindingFixture() : summaryFixture());
+  }, 80);
+  assert.equal(snapshot.models[0].efforts[0].iq, 76.71583850931677);
 });
 
 test("normalizeSettings applies defaults and bounds", () => {
-  assert.deepEqual(normalizeSettings(), {
-    refreshMinutes: 15,
-    notificationsEnabled: true,
-    notificationThreshold: 2,
+  assert.deepEqual(normalizeSettings(), { refreshMinutes: 15, notificationsEnabled: true, notificationThreshold: 2 });
+  assert.deepEqual(normalizeSettings({ refreshMinutes: 1, notificationsEnabled: false, notificationThreshold: 999 }), {
+    refreshMinutes: 5, notificationsEnabled: false, notificationThreshold: 150,
   });
-  assert.deepEqual(
-    normalizeSettings({
-      refreshMinutes: 1,
-      notificationsEnabled: false,
-      notificationThreshold: 999,
-    }),
-    {
-      refreshMinutes: 5,
-      notificationsEnabled: false,
-      notificationThreshold: 150,
-    },
-  );
-});
-
-test("fetchRadarSnapshot accepts an injected fetch implementation", async () => {
-  const snapshot = await fetchRadarSnapshot(async (url, options) => {
-    assert.match(url, /api\.codexradar\.com/);
-    assert.equal(options.cache, "no-store");
-    return {
-      ok: true,
-      json: async () => fixture(),
-    };
-  });
-
-  assert.equal(snapshot.benchmarkId, "deep-swe");
-});
-
-test("fetchRadarSnapshot surfaces non-success HTTP responses", async () => {
-  await assert.rejects(
-    () =>
-      fetchRadarSnapshot(async () => ({
-        ok: false,
-        status: 503,
-      })),
-    /HTTP 503/,
-  );
-});
-
-test("fetchRadarSnapshot aborts a stalled request", async () => {
-  await assert.rejects(
-    () =>
-      fetchRadarSnapshot(
-        async (_url, options) =>
-          new Promise((_resolve, reject) => {
-            options.signal.addEventListener("abort", () => {
-              const error = new Error("aborted");
-              error.name = "AbortError";
-              reject(error);
-            });
-          }),
-        5,
-      ),
-    /timed out/,
-  );
 });
 
 test("theme mode defaults to auto and cycles through all modes", () => {
@@ -379,8 +390,6 @@ test("automatic theme follows local system time", () => {
 });
 
 test("manual theme mode overrides system time", () => {
-  const noon = new Date(2026, 7, 10, 12, 0);
-  const midnight = new Date(2026, 7, 10, 0, 0);
-  assert.equal(resolveTheme("dark", noon), "dark");
-  assert.equal(resolveTheme("light", midnight), "light");
+  assert.equal(resolveTheme("dark", new Date(2026, 7, 10, 12, 0)), "dark");
+  assert.equal(resolveTheme("light", new Date(2026, 7, 10, 0, 0)), "light");
 });

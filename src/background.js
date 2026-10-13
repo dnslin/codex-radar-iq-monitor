@@ -3,6 +3,7 @@ import {
   DEFAULT_SETTINGS,
   SETTINGS_KEY,
   STATE_KEY,
+  canCompareSnapshots,
   compareSnapshots,
   fetchRadarSnapshot,
   formatChangeLabel,
@@ -68,8 +69,7 @@ async function scheduleRefresh(settings) {
 }
 
 function notificationChanges(changes) {
-  const effortChanges = changes.filter((change) => change.scope === "effort");
-  return (effortChanges.length ? effortChanges : changes).slice(0, 4);
+  return changes.slice(0, 4);
 }
 
 async function showChangeNotification(changes) {
@@ -84,7 +84,7 @@ async function showChangeNotification(changes) {
     await chrome.notifications.create(NOTIFICATION_ID, {
       type: "basic",
       iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-      title: "Codex Radar IQ 有变化",
+      title: "Codex Radar 雷达分有变化",
       message,
       priority: 1,
     });
@@ -110,20 +110,22 @@ async function performRefresh() {
     const snapshot = await fetchRadarSnapshot();
     return await updateStore(async () => {
       const { state, settings } = await readStore();
+      const previousSnapshot = canCompareSnapshots(state.snapshot, snapshot)
+        ? state.snapshot
+        : null;
       const changes = compareSnapshots(
-        state.snapshot,
+        previousSnapshot,
         snapshot,
         settings.notificationThreshold,
       );
       const changedModels = new Set(changes.map((change) => change.modelId));
-      const unreadCount = Math.min(
-        999,
-        (Number(state.unreadCount) || 0) + changedModels.size,
-      );
+      const unreadCount = previousSnapshot
+        ? Math.min(999, (Number(state.unreadCount) || 0) + changedModels.size)
+        : 0;
       const nextState = {
         status: "ready",
         snapshot,
-        previousSnapshot: state.snapshot,
+        previousSnapshot,
         recentChanges: changes,
         unreadCount,
         lastAttemptAt: startedAt,
@@ -132,7 +134,9 @@ async function performRefresh() {
       };
 
       await writeState(nextState);
-      if (settings.notificationsEnabled && changes.length) {
+      if (!previousSnapshot) {
+        await chrome.notifications.clear(NOTIFICATION_ID);
+      } else if (settings.notificationsEnabled && changes.length) {
         await showChangeNotification(changes);
       }
       return nextState;

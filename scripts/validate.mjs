@@ -12,7 +12,7 @@ assert.equal(manifest.background?.type, "module", "background must be an ES modu
 assert.ok(manifest.background?.service_worker, "background service worker is required");
 assert.ok(manifest.action?.default_popup, "action popup is required");
 assert.ok(
-  manifest.host_permissions?.includes("https://api.codexradar.com/*"),
+  manifest.host_permissions?.includes("https://codexradar.com/*"),
   "Codex Radar API host permission is required",
 );
 

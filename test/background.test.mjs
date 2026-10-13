@@ -5,8 +5,8 @@ import {
   DEFAULT_SETTINGS,
   SETTINGS_KEY,
   STATE_KEY,
-  buildSnapshot,
 } from "../src/radar.js";
+import { THEME_KEY } from "../src/theme.js";
 
 let moduleNumber = 0;
 
@@ -16,26 +16,72 @@ function deferred() {
   return { promise, resolve };
 }
 
-function table(iq) {
+const binding = {
+  enabled: true,
+  production_read_verified: true,
+  benchmark: "radar-bench-final64-20261004",
+  catalog_version: "catalog",
+  task_set_sha256: "tasks",
+  total_tasks: 64,
+  score_version: "radar-bench-v2-150",
+  score_max: 150,
+  model_efforts: [{ model: "test-model", effort: "high" }],
+};
+
+function summary(iq) {
   return {
-    tasks: [{ id: "task-a" }],
-    combos: [{ model: "test-model", effort: "high", agent: "codex" }],
-    cells: { "task-a|test-model|high": { n: 150, score_sum: iq } },
+    benchmark: binding.benchmark,
+    catalog_version: binding.catalog_version,
+    task_set_sha256: binding.task_set_sha256,
+    score_version: binding.score_version,
+    score_max: 150,
+    model: "test-model",
+    effort: "high",
+    score: iq,
+    coverage: 1,
+    required_tasks: 64,
+    score_status: "provisional",
+    graded_runs_count: 1,
   };
 }
 
-async function background(t, { unreadCount = 3, settings = DEFAULT_SETTINGS } = {}) {
-  const initialSnapshot = buildSnapshot(table(100), "2026-10-02T00:00:00Z");
+function snapshot(iq = 100) {
+  return {
+    version: 3,
+    benchmarkId: binding.benchmark,
+    scoringMode: binding.score_version,
+    taskSetHash: binding.task_set_sha256,
+    taskCount: 64,
+    fetchedAt: "2026-10-02T00:00:00Z",
+    models: [{
+      id: "test-model",
+      modelId: "test-model",
+      label: "test-model",
+      runtime: "codex",
+      runtimeLabel: "Codex",
+      iq,
+      efforts: [{ effort: "high", iq }],
+    }],
+  };
+}
+
+async function background(t, {
+  unreadCount = 3,
+  settings = DEFAULT_SETTINGS,
+  initialSnapshot = snapshot(),
+  recentChanges = [],
+} = {}) {
   const store = {
     [STATE_KEY]: {
       status: "ready",
       snapshot: initialSnapshot,
       previousSnapshot: null,
-      recentChanges: [],
+      recentChanges,
       unreadCount,
       lastSuccessAt: initialSnapshot.fetchedAt,
     },
     [SETTINGS_KEY]: structuredClone(settings),
+    [THEME_KEY]: "dark",
   };
   const fetchStarted = deferred();
   const fetchResponse = deferred();
@@ -44,7 +90,7 @@ async function background(t, { unreadCount = 3, settings = DEFAULT_SETTINGS } = 
   const notificationHistory = [];
   const alarms = new Map();
   let badge = "";
-  let fetchCount = 0;
+  const fetchCounts = { binding: 0, summary: 0 };
   let stateWriteGate = null;
   let stateWriteError = null;
   const releases = [];
@@ -98,8 +144,13 @@ async function background(t, { unreadCount = 3, settings = DEFAULT_SETTINGS } = 
       onMessage: event("message"),
     },
   };
-  globalThis.fetch = async () => {
-    fetchCount += 1;
+  globalThis.fetch = async (url) => {
+    if (url === "https://codexradar.com/data/radar-bench-binding.json") {
+      fetchCounts.binding += 1;
+      return { ok: true, json: async () => structuredClone(binding) };
+    }
+    assert.equal(url, "https://codexradar.com/api/radar-bench-score?model=test-model&effort=high&view=summary");
+    fetchCounts.summary += 1;
     fetchStarted.resolve();
     return fetchResponse.promise;
   };
@@ -124,7 +175,8 @@ async function background(t, { unreadCount = 3, settings = DEFAULT_SETTINGS } = 
     alarms,
     message,
     badge: () => badge,
-    fetchCount: () => fetchCount,
+    fetchCounts: () => ({ ...fetchCounts }),
+    preferences: () => ({ settings: store[SETTINGS_KEY], theme: store[THEME_KEY] }),
     getState: async () => (await message({ type: "GET_STATE" })).state,
     async refresh() {
       listeners.alarm({ name: ALARM_NAME });
@@ -132,7 +184,7 @@ async function background(t, { unreadCount = 3, settings = DEFAULT_SETTINGS } = 
       return { result: message({ type: "REFRESH_NOW" }) };
     },
     complete(iq = 100) {
-      fetchResponse.resolve({ ok: true, json: async () => table(iq) });
+      fetchResponse.resolve({ ok: true, json: async () => summary(iq) });
     },
     fail() {
       fetchResponse.resolve({ ok: false, status: 503 });
@@ -147,6 +199,39 @@ async function background(t, { unreadCount = 3, settings = DEFAULT_SETTINGS } = 
     failNextStateWrite(error) { stateWriteError = error; },
   };
 }
+
+test("a refreshed Radar Bench snapshot replaces the old DeepSWE notification baseline", async (t) => {
+  const oldSnapshot = {
+    ...snapshot(),
+    version: 2,
+    benchmarkId: "deep-swe",
+    scoringMode: "binary-majority",
+  };
+  delete oldSnapshot.taskSetHash;
+  const settings = { ...DEFAULT_SETTINGS, refreshMinutes: 30 };
+  const h = await background(t, {
+    initialSnapshot: oldSnapshot,
+    unreadCount: 7,
+    recentChanges: [{ modelId: "removed-model", kind: "changed" }],
+    settings,
+  });
+  h.notifications.set("codex-radar-iq-change", { message: "Old DeepSWE change" });
+
+  const refresh = await h.refresh();
+  h.complete(103);
+  assert.equal((await refresh.result).ok, true);
+
+  const state = await h.getState();
+  assert.equal(state.snapshot.version, 3);
+  assert.equal(state.snapshot.models[0].iq, 103);
+  assert.equal(state.previousSnapshot, null);
+  assert.deepEqual(state.recentChanges, []);
+  assert.equal(state.unreadCount, 0);
+  assert.equal(h.badge(), "");
+  assert.equal(h.notificationHistory.length, 0);
+  assert.equal(h.notifications.size, 0);
+  assert.deepEqual(h.preferences(), { settings, theme: "dark" });
+});
 
 test("successful refresh preserves MARK_SEEN while the API request is pending", async (t) => {
   const h = await background(t);
@@ -168,10 +253,10 @@ test("failed refresh preserves the acknowledged unread count and cached snapshot
   await h.message({ type: "MARK_SEEN" });
 
   h.fail();
-  assert.deepEqual(await refresh.result, { ok: false, error: "Radar API request failed: HTTP 503" });
+  assert.deepEqual(await refresh.result, { ok: false, error: "Radar API test-model high request failed: HTTP 503" });
   const state = await h.getState();
   assert.equal(state.status, "error");
-  assert.equal(state.error, "Radar API request failed: HTTP 503");
+  assert.equal(state.error, "Radar API test-model high request failed: HTTP 503");
   assert.deepEqual(state.snapshot, h.initialSnapshot);
   assert.equal(state.unreadCount, 0);
   assert.equal(h.badge(), "");
@@ -238,7 +323,7 @@ test("lowering the threshold during refresh includes newly qualifying changes", 
   h.complete(103);
   await refresh.result;
   const state = await h.getState();
-  assert.equal(state.recentChanges.length, 2, "both the model and effort changed");
+  assert.equal(state.recentChanges.length, 1, "the effort changed; the headline is only a projection");
   assert.equal(state.unreadCount, 1, "a model is counted only once");
   assert.equal(h.notificationHistory.length, 1);
 });
@@ -322,5 +407,5 @@ test("overlapping Alarm and manual refresh use one API request", async (t) => {
 
   assert.equal((await refresh.result).ok, true);
   assert.equal((await second).ok, true);
-  assert.equal(h.fetchCount(), 1);
+  assert.deepEqual(h.fetchCounts(), { binding: 1, summary: 1 });
 });

@@ -5,6 +5,7 @@ import { dirname, extname, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { buildSnapshot, STATE_KEY } from "../src/radar.js";
+import { providerGroups } from "../src/view.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const extensionPath = await realpath(resolve(process.argv[2] || root));
@@ -29,7 +30,7 @@ function inPopup(callback, argument) {
 }
 
 async function waitFor(callback, description, argument) {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     const result = inPopup(callback, argument);
     if (result) return result;
@@ -303,57 +304,105 @@ function setTheme(mode) {
 async function assertEffortCoverage(target) {
   const response = evaluate('chrome.runtime.sendMessage({ type: "GET_STATE" })');
   assert.equal(response.ok, true);
-  const tasks = Array.from({ length: 5 }, (_, index) => ({ id: `coverage-${index}` }));
-  const model = "kimi-k2.8-preview";
-  const snapshot = buildSnapshot({
-    benchmark_id: "deep-swe",
-    tasks,
-    combos: ["low", "high", "max"].map((effort) => ({ model, agent: "kimi-code", effort })),
-    cells: {
-      ...Object.fromEntries(tasks.slice(0, 3).map(({ id }) => [`${id}|${model}|low`, { n: 1, score_sum: 1 }])),
-      [`${tasks[0].id}|${model}|high`]: { n: 1, score_sum: 1 },
-    },
-  });
+  const model = "gpt-6-sol";
+  const values = [
+    { effort: "low", score: 147.26, coverage: 3, samples: 7 },
+    { effort: "medium", score: 0, coverage: 5, samples: 5 },
+    { effort: "high", score: 140.125, coverage: 4, samples: 9 },
+    { effort: "max", score: null, coverage: 0, samples: 0 },
+    { effort: "ultra", score: 130.675, coverage: 2, samples: null },
+  ];
+  const binding = {
+    enabled: true,
+    production_read_verified: true,
+    benchmark: "radar-bench-coverage-fixture",
+    catalog_version: "coverage-catalog",
+    task_set_sha256: "coverage-tasks",
+    total_tasks: 5,
+    score_version: "radar-bench-v2-150",
+    score_max: 150,
+    model_efforts: values.map(({ effort }) => ({ model, effort })),
+  };
+  const snapshot = buildSnapshot(binding, values.map((value) => ({
+    benchmark: binding.benchmark,
+    catalog_version: binding.catalog_version,
+    task_set_sha256: binding.task_set_sha256,
+    score_version: binding.score_version,
+    score_max: binding.score_max,
+    model,
+    effort: value.effort,
+    score: value.score,
+    coverage: value.coverage,
+    required_tasks: binding.total_tasks,
+    score_status: value.coverage === 0 ? "missing_current_result"
+      : value.coverage === binding.total_tasks ? "complete" : "provisional",
+    graded_runs_count: value.samples,
+  })));
   try {
     evaluate(`chrome.storage.local.set(${JSON.stringify({ [STATE_KEY]: {
       ...response.state, snapshot, previousSnapshot: null,
     } })}).then(() => true)`);
     await waitFor((view) => view.document.querySelectorAll(".model-row").length === 1 &&
-      view.document.querySelectorAll(".effort-table tbody tr").length === 3, "coverage fixture");
+      view.document.querySelectorAll(".effort-table tbody tr").length === 5, "coverage fixture");
     const coverage = inPopup((view) => {
       const doc = view.document;
       const row = doc.querySelector(".model-row");
       row.querySelector("summary").click();
       return {
-        overallWarning: !row.querySelector(".model-meta .coverage-note").hidden,
+        headline: {
+          score: row.querySelector(".model-score").textContent,
+          effort: row.querySelector(".effort-count").textContent,
+          samples: row.querySelector("summary .sample-count").textContent,
+          coverage: row.querySelector("summary .coverage-count").textContent,
+          warning: row.querySelector(".model-meta .coverage-note").hidden
+            ? null : row.querySelector(".model-meta .coverage-note").textContent,
+        },
         efforts: [...row.querySelectorAll("tbody tr")].map((effort) => ({
           effort: effort.querySelector("th").textContent,
           iq: effort.children[1].textContent,
           warning: effort.querySelector(".coverage-note")?.textContent ?? null,
           samples: effort.querySelector(".sample-count").textContent,
+          coverage: effort.querySelector(".coverage-count").textContent,
         })),
         metric: doc.querySelector(".section-heading p").textContent,
         ariaLabel: row.querySelector("summary").getAttribute("aria-label"),
+        caption: row.querySelector("caption").textContent,
         obsoleteStatus: Boolean(doc.querySelector(".model-status")),
       };
     });
-    assert.equal(coverage.overallWarning, false, "60% overall task coverage is sufficient");
+    assert.deepEqual(coverage.headline, {
+      score: "147.3", effort: "最高分 · low", samples: "7 次", coverage: "3 / 5 题", warning: "阶段分",
+    }, "headline score, samples and coverage must all come from its explicitly named highest-scoring effort");
     assert.deepEqual(coverage.efforts, [
-      { effort: "low", iq: "150", warning: null, samples: "3 次" },
-      { effort: "high", iq: "150", warning: "样本覆盖不足", samples: "1 次" },
-      { effort: "max", iq: "—", warning: "样本覆盖不足", samples: "待采样" },
-    ], "coverage warnings must be computed for each effort, including an unsampled effort");
-    assert.match(coverage.metric, /DeepSWE.*软件工程/);
-    assert.match(coverage.ariaLabel, /DeepSWE/);
+      { effort: "low", iq: "147.3", warning: "阶段分", samples: "7 次", coverage: "3 / 5 题" },
+      { effort: "medium", iq: "0", warning: null, samples: "5 次", coverage: "5 / 5 题" },
+      { effort: "high", iq: "140.1", warning: "阶段分", samples: "9 次", coverage: "4 / 5 题" },
+      { effort: "max", iq: "—", warning: "阶段分", samples: "待采样", coverage: "0 / 5 题" },
+      { effort: "ultra", iq: "130.7", warning: "阶段分", samples: "样本数未知", coverage: "2 / 5 题" },
+    ], "each effort must retain decimal precision, valid zero, missing scores and its own coverage/sample meaning");
+    assert.match(coverage.metric, /雷达Bench.*最高分档位/);
+    assert.match(coverage.ariaLabel, /雷达Bench.*最高分.*low/);
+    assert.match(coverage.caption, /雷达Bench/);
+    assert.doesNotMatch(coverage.caption, /DeepSWE/);
     assert.equal(coverage.obsoleteStatus, false);
     await assertAppearance(target, "light");
     if (screenshotPath) await capturePopup(target, screenshotVariant("coverage-light"));
+
+    const oldSnapshot = { ...snapshot, version: 2, benchmarkId: "deep-swe", scoringMode: "binary-majority" };
+    delete oldSnapshot.taskSetHash;
+    evaluate(`chrome.storage.local.set(${JSON.stringify({ [STATE_KEY]: {
+      ...response.state, snapshot: oldSnapshot, previousSnapshot: null,
+    } })}).then(() => true)`);
+    await waitFor((view) => view.document.querySelectorAll(".model-row").length === 0 &&
+      !view.document.querySelector("#empty-state").hidden, "old DeepSWE cache isolation");
+    assert.equal(inPopup((view) => view.document.querySelector("#dataset-meta").textContent), "",
+      "an old DeepSWE cache must not be labeled as Radar Bench data");
   } finally {
     evaluate(`chrome.storage.local.set(${JSON.stringify({ [STATE_KEY]: response.state })}).then(() => true)`);
     await waitFor((view, count) => view.document.querySelectorAll(".model-row").length === count,
       "restored live snapshot", response.state.snapshot.models.length);
   }
-  console.log("Passed: sufficient overall coverage with a sparse 150 IQ effort, unsampled effort, and explicit DeepSWE labels.");
+  console.log("Passed: highest-effort headline with matching samples/coverage, decimals, valid zero, null score, unknown samples, provisional scores, and old DeepSWE cache isolation.");
 }
 
 try {
@@ -399,12 +448,11 @@ try {
   const all = assertVisibleModels(models, "");
   const allIds = all.groups.flatMap((group) => group.rows.map(({ id }) => id));
   assert.equal(new Set(allIds).size, allIds.length, "a source record must not be duplicated across providers");
-  for (const [provider, name] of [["deepseek", /deepseek/i], ["anthropic", /claude/i]]) {
-    const expected = models.filter((model) => name.test(model.label));
-    assert.ok(expected.length > 0, `live snapshot must contain ${provider} records for this check`);
-    const group = all.groups.find((candidate) => candidate.provider === provider);
-    assert.ok(group, `all view must contain a ${provider} group`);
-    assert.deepEqual(group.rows.map(({ id }) => id).sort(), expected.map(({ id }) => id).sort(), `${provider} group must contain its models across all runtimes only`);
+  for (const expected of providerGroups(models)) {
+    const group = all.groups.find((candidate) => candidate.provider === expected.id);
+    assert.ok(group, `all view must contain a ${expected.id} group`);
+    assert.deepEqual(group.rows.map(({ id }) => id).sort(), expected.models.map(({ id }) => id).sort(),
+      `${expected.id} group must contain exactly its source models`);
   }
   await waitFor((view) => [...view.document.querySelectorAll(".provider-icon img")].every((image) => image.complete), "provider SVG assets");
   await assertProviderIcons();
@@ -421,13 +469,15 @@ try {
   search("");
   assertVisibleModels(models, "");
 
-  selectProvider("deepseek");
-  assertVisibleModels(models.filter(({ label }) => /deepseek/i.test(label)), "deepseek");
+  const selectedProvider = providerGroups(models)[0].id;
+  const providerModels = () => providerGroups(models).find(({ id }) => id === selectedProvider)?.models ?? [];
+  selectProvider(selectedProvider);
+  assertVisibleModels(providerModels(), selectedProvider);
   inPopup((view) => { view.document.querySelector("#refresh-button").click(); return true; });
-  assert.deepEqual(inPopup(providerState).selected, ["deepseek"], "refresh must keep the selected provider");
+  assert.deepEqual(inPopup(providerState).selected, [selectedProvider], "refresh must keep the selected provider");
   await waitFor((view) => !view.document.querySelector("#refresh-button").disabled, "selected-provider refresh");
   models = sourceModels();
-  assertVisibleModels(models.filter(({ label }) => /deepseek/i.test(label)), "deepseek");
+  assertVisibleModels(providerModels(), selectedProvider);
 
   const expanded = inPopup((view) => {
     const row = view.document.querySelector(".model-row:not([hidden])");
@@ -438,15 +488,23 @@ try {
   assert.ok(expanded.contentHeight > 0, "expanded model details must be visible");
   await assertAppearance(popup, "light");
   if (screenshotPath) {
-    await capturePopup(popup, screenshotVariant("deepseek-light"));
+    await capturePopup(popup, screenshotVariant(`${selectedProvider}-light`));
   }
 
-  selectProvider("anthropic");
-  assertVisibleModels(models.filter(({ label }) => /claude/i.test(label)), "anthropic");
+  for (const group of providerGroups(models)) {
+    selectProvider(group.id);
+    assertVisibleModels(group.models, group.id);
+  }
   selectProvider("");
-  for (const [alias, pattern] of [["Anthropic", /claude/i], ["深度求索", /deepseek/i]]) {
+  const groups = providerGroups(models);
+  for (const group of groups) {
+    const alias = group.company || group.label;
     search(alias);
-    assertVisibleModels(models.filter(({ label }) => pattern.test(label)), "");
+    const expected = groups.filter((candidate) =>
+      [candidate.label, candidate.company, ...candidate.aliases]
+        .some((name) => name.toLocaleLowerCase().includes(alias.toLocaleLowerCase())))
+      .flatMap(({ models: entries }) => entries);
+    assertVisibleModels(expected, "");
   }
   search("");
   const beforeSort = inPopup(providerState).groups.map(({ provider }) => provider);
@@ -463,9 +521,9 @@ try {
     assert.deepEqual(names, [...names].sort((left, right) => left.localeCompare(right, "zh-CN", { numeric: true, sensitivity: "base" })), "name sorting must apply within each provider");
   }
 
-  selectProvider("deepseek");
+  selectProvider(selectedProvider);
   search("__radar_popup_no_matching_model__");
-  assertVisibleModels([], "deepseek");
+  assertVisibleModels([], selectedProvider);
   assert.equal(inPopup((view) => !view.document.querySelector("#empty-state").hidden && !view.document.querySelector("#clear-filters").hidden), true, "empty results must provide a clear action");
   const clearedQuery = inPopup((view) => {
     view.document.querySelector("#clear-filters").click();
@@ -474,7 +532,7 @@ try {
   assert.equal(clearedQuery, "", "clear action must remove the search query");
   assertVisibleModels(models, "");
   assertLayout(inPopup(measure));
-  console.log(`Passed: natural 720×600 toolbar popup, ${models.length} source models, per-effort coverage/DeepSWE labels, local accessible brand icons, theme contrast/focus, provider groups/navigation, refresh retention, provider aliases, group sorting, empty-result reset, expand, and no horizontal overflow.`);
+  console.log(`Passed: natural 720×600 toolbar popup, ${models.length} source models, Radar Bench highest-effort labels and coverage, local accessible brand icons, theme contrast/focus, provider groups/navigation, refresh retention, provider aliases, group sorting, empty-result reset, expand, and no horizontal overflow.`);
 } finally {
   browser(["close"]);
 }

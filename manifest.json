@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Codex Radar IQ Monitor",
   "short_name": "Radar IQ",
-  "version": "0.8.1",
-  "description": "按厂商查看 Codex Radar 的 DeepSWE 软件工程 IQ，支持模型搜索、运行工具筛选、思考等级详情和分数变化提醒。",
+  "version": "0.9.0",
+  "description": "查看 Codex Radar 的雷达Bench分数，支持模型搜索、思考等级详情和分数变化提醒。",
   "minimum_chrome_version": "120",
   "permissions": [
     "alarms",
@@ -11,7 +11,7 @@
     "notifications"
   ],
   "host_permissions": [
-    "https://api.codexradar.com/*"
+    "https://codexradar.com/*"
   ],
   "icons": {
     "16": "icons/icon16.png",
